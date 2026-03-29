@@ -5,4 +5,3 @@ build/
 *.egg-info/
 .venv/
 .env
-sibna_demo/

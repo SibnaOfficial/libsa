@@ -7,7 +7,7 @@ from setuptools import setup, find_packages
 import os
 import platform
 
-version = "1.0.4"
+version = "1.0.5"
 
 # Package data (including the native library)
 package_data = {

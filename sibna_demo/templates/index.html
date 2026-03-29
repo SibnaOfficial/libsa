@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Sibna Protocol Demo</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <div class="glass-container">
+        <h1>🛡️ Sibna Protocol</h1>
+        <div id="version-tag" class="tag">Loading...</div>
+        <div class="card">
+            <h2>Identity</h2>
+            <button id="btn-generate-identity">Generate Identity</button>
+            <code id="display-pubkey" class="hidden"></code>
+        </div>
+        <div class="card">
+            <h2>Encryption</h2>
+            <input type="text" id="plaintext-input" placeholder="Message...">
+            <button id="btn-encrypt">Encrypt</button>
+            <div id="crypto-info" class="hidden">
+                <label>Ciphertext:</label><code id="display-ciphertext"></code>
+                <label>Key:</label><code id="display-key"></code>
+            </div>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
