@@ -20,7 +20,7 @@ def index():
 
 @app.route('/api/version', methods=['GET'])
 def get_version():
-    return jsonify({"protocol_version": sibna.Context.version(), "sdk_version": "1.0.4"})
+    return jsonify({"protocol_version": sibna.Context.version(), "sdk_version": "1.0.5"})
 
 @app.route('/api/generate_identity', methods=['POST'])
 def generate_identity():
