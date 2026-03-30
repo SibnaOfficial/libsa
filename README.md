@@ -1,4 +1,4 @@
-# 🛡️ Sibna Protocol — Python SDK
+#  Sibna Protocol — Python SDK
 
 <div align="center">
 
@@ -13,20 +13,20 @@
 
 ---
 
-## ✨ Key Features
+##  Key Features
 
 | Feature | Details |
 |---|---|
-| 🔒 **Military-Grade Security** | X3DH + Double Ratchet protocol (Signal-compatible) |
-| 🚀 **Native Performance** | Pre-compiled Rust core — no build step required |
-| 📦 **Zero Dependencies** | Completely standalone, no Rust toolchain needed |
-| 🛡️ **Perfect Forward Secrecy** | Automatic key rotation per message |
-| 💻 **Cross-Platform** | Windows, Linux, macOS — all supported |
-| 🔑 **ChaCha20-Poly1305** | AEAD encryption with authenticated data support |
+|  **Military-Grade Security** | X3DH + Double Ratchet protocol (Signal-compatible) |
+|  **Native Performance** | Pre-compiled Rust core — no build step required |
+|  **Zero Dependencies** | Completely standalone, no Rust toolchain needed |
+|  **Perfect Forward Secrecy** | Automatic key rotation per message |
+|  **Cross-Platform** | Windows, Linux, macOS — all supported |
+|  **ChaCha20-Poly1305** | AEAD encryption with authenticated data support |
 
 ---
 
-## 🚀 Installation
+##  Installation
 
 ```bash
 pip install sibna
@@ -36,7 +36,7 @@ Requires **Python 3.8+**. No other system dependencies needed.
 
 ---
 
-## ⚡ Quick Start
+##  Quick Start
 
 ### Symmetric Encryption
 
@@ -85,7 +85,7 @@ encrypted = session.encrypt(b"Hello, Secure World!")
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 Sibna uses a layered security approach:
 
@@ -108,7 +108,7 @@ Sibna uses a layered security approach:
 
 ---
 
-## 🔐 Security
+##  Security
 
 - All cryptographic operations are performed in the native Rust core
 - Memory is zeroed after use (no key material left in heap)
@@ -117,14 +117,14 @@ Sibna uses a layered security approach:
 
 ---
 
-## 📜 License
+##  License
 
 Licensed under the **Apache License 2.0**.  
 See [LICENSE](https://github.com/SibnaOfficial/libsa/blob/main/LICENSE) for full details.
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 
 Issues and pull requests are welcome at [github.com/SibnaOfficial/libsa](https://github.com/SibnaOfficial/libsa).
 
