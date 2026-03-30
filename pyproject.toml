@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sibna"
+version = "1.0.0"
+description = "Standalone Ultra-Secure Communication Protocol - Python SDK"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Sibna Security Team", email = "security@sibna.dev" }
+]
+keywords = [
+    "cryptography",
+    "encryption",
+    "signal-protocol",
+    "secure-messaging",
+    "e2ee",
+    "end-to-end-encryption",
+    "x3dh",
+    "double-ratchet",
+    "chacha20",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Communications",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+requires-python = ">=3.8"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/SibnaOfficial/libsa"
+Repository = "https://github.com/SibnaOfficial/libsa"
+"Bug Tracker" = "https://github.com/SibnaOfficial/libsa/issues"
+Changelog = "https://github.com/SibnaOfficial/libsa/releases"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sibna*"]
+
+[tool.setuptools.package-data]
+sibna = ["*.so", "*.dll", "*.dylib"]
