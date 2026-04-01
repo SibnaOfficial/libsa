@@ -36,7 +36,7 @@ Usage (async + WebSocket):
     asyncio.run(main())
 """
 
-__version__ = "1.0.0"
+__version__ = "1.6.0"
 
 import asyncio
 import hashlib
@@ -146,23 +146,26 @@ def pad_payload(data: bytes) -> bytes:
     """
     Pad payload to the nearest 1024-byte boundary.
     Makes all messages appear the same size to a passive observer.
+
+    Format: [padding_len: 2 bytes LE] + [data] + [random padding]
+    Total length is always a multiple of 1024.
     """
-    unpadded_len   = len(data) + 1
-    remainder      = unpadded_len % _PADDING_BLOCK
-    padding_needed = (_PADDING_BLOCK - remainder) % _PADDING_BLOCK or _PADDING_BLOCK
-    indicator      = padding_needed % 256
-    return bytes([indicator]) + data + secrets.token_bytes(padding_needed)
+    content_len  = 2 + len(data)
+    remainder    = content_len % _PADDING_BLOCK
+    padding_len  = (_PADDING_BLOCK - remainder) % _PADDING_BLOCK
+    header       = padding_len.to_bytes(2, "little")
+    return header + data + secrets.token_bytes(padding_len)
 
 
 def unpad_payload(padded: bytes) -> bytes:
     """Remove padding added by pad_payload()."""
-    if not padded:
-        raise ValueError("Empty payload")
-    indicator      = padded[0]
-    total_len      = len(padded)
-    padding_needed = total_len % _PADDING_BLOCK
-    actual_padding = indicator if padding_needed == 0 else padding_needed
-    return padded[1 : total_len - actual_padding]
+    if len(padded) < 2:
+        raise ValueError("Payload too short")
+    padding_len = int.from_bytes(padded[:2], "little")
+    data_end    = len(padded) - padding_len
+    if data_end < 2:
+        raise ValueError("Invalid padding length")
+    return padded[2:data_end]
 
 
 def make_signed_envelope(
