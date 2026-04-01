@@ -1,186 +1,187 @@
 # Sibna Protocol — Python SDK
 
-Python SDK للتعامل مع بروتوكول Sibna المشفر.
+Python SDK for the Sibna encrypted communication protocol.
 
 ---
 
-## قبل كل شيء — ماذا تحتاج؟
+## Before You Start — What You Need
 
-هذا الـ SDK **لا يعمل وحده**. يحتاج إلى ملف مكتبة مُجمَّعة من مشروع `sibna-protc`:
+This SDK **does not work standalone**. It requires a compiled native library built from the `sibna-protc` Rust project:
 
-| النظام  | الملف المطلوب        |
-|---------|----------------------|
-| Windows | `sibna_core.dll`     |
-| Linux   | `libsibna_core.so`   |
-| macOS   | `libsibna_core.dylib`|
+| OS      | Required File          |
+|---------|------------------------|
+| Windows | `sibna_core.dll`       |
+| Linux   | `libsibna_core.so`     |
+| macOS   | `libsibna_core.dylib`  |
 
-**لبناء المكتبة:**
+**To build the library:**
 ```bash
 cd sibna-protc/core
 cargo build --release --features ffi
-# الملف الناتج في: target/release/
+# Output is in: target/release/
 ```
-ثم انسخ الملف الناتج إلى نفس مجلد `sibna/` في هذا الـ SDK.
+Then copy the resulting file into the same `sibna/` folder as this SDK.
 
 ---
 
-## التثبيت
+## Installation
 
 ```bash
-# المكتبات الخارجية المطلوبة (ليست zero-dependencies)
-pip install cryptography          # للـ Identity + التحقق من التوقيعات
-pip install requests              # للـ HTTP sync client
-pip install aiohttp               # للـ async + WebSocket
+# External dependencies (this SDK is NOT zero-dependencies)
+pip install cryptography          # For Identity + signature verification
+pip install requests              # For the sync HTTP client
+pip install aiohttp               # For async + WebSocket
 ```
 
 ---
 
-## ما الذي يفعله هذا الـ SDK؟
+## What This SDK Does
 
-### `sibna` (الـ core — يحتاج المكتبة المُجمَّعة)
+### `sibna` (core — requires the compiled native library)
 
-| الدالة / الكلاس | ما يفعله |
-|-----------------|----------|
-| `is_available()` | يتحقق إن كانت المكتبة محملة |
-| `generate_key()` | يولّد مفتاح 32 بايت عشوائي |
-| `encrypt(key, data)` | يشفّر البيانات (ChaCha20-Poly1305) |
-| `decrypt(key, data)` | يفك التشفير |
-| `random_bytes(n)` | يولّد بايتات عشوائية |
-| `Context()` | يدير الهوية والجلسات المشفرة |
-| `Context.generate_identity()` | يولّد مفتاحي هوية (Ed25519 + X25519) |
-| `Context.generate_prekey_bundle()` | يولّد bundle للرفع على السيرفر |
-| `Context.perform_handshake(...)` | ينفّذ X3DH ويُنشئ جلسة Double Ratchet |
-| `Context.session_encrypt(...)` | يشفّر رسالة عبر جلسة موجودة |
-| `Context.session_decrypt(...)` | يفك تشفير رسالة |
+| Function / Class | What it does |
+|------------------|--------------|
+| `is_available()` | Checks if the native library is loaded |
+| `generate_key()` | Generates a random 32-byte key |
+| `encrypt(key, data)` | Encrypts data (ChaCha20-Poly1305) |
+| `decrypt(key, data)` | Decrypts data |
+| `random_bytes(n)` | Generates cryptographically secure random bytes |
+| `Context()` | Manages identity and encrypted sessions |
+| `Context.generate_identity()` | Generates an identity keypair (Ed25519 + X25519) |
+| `Context.generate_prekey_bundle()` | Generates a bundle to upload to the prekey server |
+| `Context.perform_handshake(...)` | Runs X3DH and creates a Double Ratchet session |
+| `Context.session_encrypt(...)` | Encrypts a message over an existing session |
+| `Context.session_decrypt(...)` | Decrypts a message |
 
-### `sibna.client` (الشبكة — يحتاج `requests` / `aiohttp`)
+### `sibna.client` (networking — requires `requests` / `aiohttp`)
 
-| الكلاس | ما يفعله |
-|--------|----------|
-| `Identity` | مفتاح Ed25519 للمصادقة مع السيرفر |
-| `SibnaClient` | HTTP sync client |
+| Class | What it does |
+|-------|--------------|
+| `Identity` | Ed25519 keypair for server authentication |
+| `SibnaClient` | Synchronous HTTP client |
 | `AsyncSibnaClient` | Async + WebSocket client |
 
 ---
 
-## مثال أساسي — تشفير بسيط
+## Basic Example — Simple Encryption
 
 ```python
 import sibna
 
-# تحقق أن المكتبة موجودة
+# Check the library is available
 if not sibna.is_available():
-    raise RuntimeError(f"المكتبة غير موجودة في: {sibna.library_path()}")
+    raise RuntimeError("Native library not found. Build it from sibna-protc first.")
 
-# تشفير وفك تشفير
-key = sibna.generate_key()          # 32 بايت عشوائي
-ct  = sibna.encrypt(key, b"مرحبا")
+# Encrypt and decrypt
+key = sibna.generate_key()          # Random 32-byte key
+ct  = sibna.encrypt(key, b"Hello")
 pt  = sibna.decrypt(key, ct)
-assert pt == "مرحبا".encode()
+assert pt == b"Hello"
 
-# مع associated_data (بيانات إضافية مُصادَق عليها)
-ct  = sibna.encrypt(key, b"سري", associated_data=b"context-header")
+# With associated data (authenticated but not encrypted)
+ct  = sibna.encrypt(key, b"Secret", associated_data=b"context-header")
 pt  = sibna.decrypt(key, ct, associated_data=b"context-header")
 ```
 
 ---
 
-## مثال متقدم — جلسة Double Ratchet
+## Advanced Example — Double Ratchet Session
 
 ```python
 import sibna
 
-# على جهاز Alice
+# On Alice's device
 alice_ctx = sibna.Context(password=b"AlicePass1!")
 alice_ed, alice_x = alice_ctx.generate_identity()
 alice_bundle = alice_ctx.generate_prekey_bundle()
 
-# على جهاز Bob
+# On Bob's device
 bob_ctx = sibna.Context(password=b"BobPass1!")
 bob_ed, bob_x = bob_ctx.generate_identity()
 bob_bundle = bob_ctx.generate_prekey_bundle()
 
-# Alice تبدأ الاتصال مع Bob
+# Alice initiates the handshake with Bob
 alice_ctx.perform_handshake(
-    peer_id=bob_ed,          # معرّف Bob
-    peer_bundle=bob_bundle,  # bundle Bob (من السيرفر)
+    peer_id=bob_ed,          # Bob's identity key (used as session ID)
+    peer_bundle=bob_bundle,  # Bob's bundle (fetched from prekey server)
     initiator=True,
 )
 
-# Bob يستقبل الاتصال من Alice
+# Bob accepts the handshake from Alice
 bob_ctx.perform_handshake(
     peer_id=alice_ed,
     peer_bundle=alice_bundle,
     initiator=False,
 )
 
-# Alice تشفّر
-ciphertext = alice_ctx.session_encrypt(bob_ed, b"مرحبا يا Bob!")
+# Alice encrypts
+ciphertext = alice_ctx.session_encrypt(bob_ed, b"Hello Bob!")
 
-# Bob يفك التشفير
+# Bob decrypts
 plaintext = bob_ctx.session_decrypt(alice_ed, ciphertext)
+assert plaintext == b"Hello Bob!"
 ```
 
 ---
 
-## مثال — HTTP Client
+## Example — HTTP Client
 
 ```python
 from sibna.client import SibnaClient
 import sibna
 
-# إعداد الـ context والهوية
+# Set up encryption context
 ctx = sibna.Context()
 ctx.generate_identity()
 bundle = ctx.generate_prekey_bundle()
 
-# الاتصال بالسيرفر
+# Connect to server
 client = SibnaClient(server="http://localhost:8080")
-client.generate_identity()   # هوية منفصلة للمصادقة
-client.authenticate()         # JWT challenge-response
+client.generate_identity()   # Separate identity for server auth
+client.authenticate()         # JWT challenge-response flow
 client.upload_prekey(bundle.hex())
 
-# إرسال رسالة (payload مشفر مسبقاً)
+# Send an encrypted message (payload is pre-encrypted by Context)
 ciphertext = ctx.session_encrypt(b"peer_id_here", b"Hello!")
 client.send_message(
     recipient_id="peer_identity_hex",
     payload_hex=ciphertext.hex(),
 )
 
-# استقبال رسائل
+# Receive messages
 messages = client.fetch_inbox()
 for msg in messages:
-    pt = ctx.session_decrypt(
+    plaintext = ctx.session_decrypt(
         bytes.fromhex(msg["sender_id"]),
         bytes.fromhex(msg["payload_hex"]),
     )
-    print(pt.decode())
+    print(plaintext.decode())
 ```
 
 ---
 
-## الأخطاء الشائعة
+## Common Errors
 
-| الخطأ | السبب | الحل |
-|-------|-------|------|
-| `LibraryNotFoundError` | المكتبة غير موجودة | ابنِ `sibna-protc` بـ Rust |
-| `SibnaError(13)` | بيانات منقحة أو مفتاح خاطئ | تحقق من المفتاح و associated_data |
-| `SibnaError(7)` | جلسة غير موجودة | استدعِ `perform_handshake()` أولاً |
-| `SibnaError(10)` | كلمة مرور ضعيفة | استخدم كلمة مرور بحروف كبيرة وصغيرة وأرقام |
-| `MissingDependencyError` | مكتبة Python غير مثبتة | `pip install cryptography requests aiohttp` |
-
----
-
-## ملاحظة حول "Zero Dependencies"
-
-هذا الـ SDK **ليس** zero-dependencies:
-- `__init__.py` يحتاج المكتبة المُجمَّعة (Rust)
-- `client.py` يحتاج `cryptography`, `requests`, `aiohttp`
-
-الـ Rust Core نفسه لا يحتاج أي شيء إضافي بعد البناء.
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `LibraryNotFoundError` | Native library not found | Build `sibna-protc` with Rust |
+| `SibnaError(13)` | Tampered data or wrong key | Check key and `associated_data` |
+| `SibnaError(7)` | Session does not exist | Call `perform_handshake()` first |
+| `SibnaError(10)` | Weak password | Use a password with uppercase, lowercase, and digits |
+| `MissingDependencyError` | Python package not installed | `pip install cryptography requests aiohttp` |
 
 ---
 
-## الترخيص
+## A Note on Dependencies
+
+This SDK is **not** zero-dependencies:
+- `__init__.py` requires the compiled Rust native library
+- `client.py` requires `cryptography`, `requests`, and `aiohttp`
+
+The Rust core itself has no runtime dependencies once compiled.
+
+---
+
+## License
 
 Apache-2.0
