@@ -2,49 +2,32 @@
 Sibna Protocol — Python SDK
 ============================
 
-Python wrapper للـ Sibna Rust Core عبر FFI (ctypes).
+Python wrapper for the Sibna Rust core via FFI (ctypes).
+No external dependencies — uses only Python stdlib + the compiled Rust library.
 
-ما يفعله هذا الـ SDK:
-- تشفير وفك تشفير البيانات (ChaCha20-Poly1305)
-- توليد مفاتيح عشوائية آمنة
-- إنشاء هوية (Ed25519 + X25519)
-- إنشاء جلسة Double Ratchet مع peer (بعد X3DH handshake)
-- تشفير وفك تشفير رسائل الجلسة
+Requirements:
+    - Python 3.8+
+    - The compiled native library from sibna-protc/core:
+        Windows : sibna_core.dll
+        Linux   : libsibna_core.so
+        macOS   : libsibna_core.dylib
 
-ما لا يفعله هذا الـ SDK:
-- لا يتصل بأي سيرفر (هذا دور client.py)
-- لا يدير الشبكة أو WebSocket
-- لا يعمل بدون ملف المكتبة المُجمَّعة (.dll / .so / .dylib)
+    Build it:
+        cd sibna-protc/core
+        cargo build --release --features ffi
 
-المتطلبات:
-- Python 3.8+
-- ملف المكتبة المُجمَّعة من مشروع sibna-protc (Rust)
-  - Windows : sibna_core.dll
-  - Linux   : libsibna_core.so
-  - macOS   : libsibna_core.dylib
+    Then place the file next to this sibna/ folder.
 
-لبناء المكتبة بنفسك:
-    cd sibna-protc/core
-    cargo build --release --features ffi
-    # النتيجة في: target/release/
-
-مثال استخدام أساسي:
+Quick start:
     import sibna
 
-    # تحقق أن المكتبة محملة
     if not sibna.is_available():
-        raise RuntimeError("المكتبة غير موجودة — ابنها من sibna-protc أولاً")
+        raise RuntimeError("Native library not found")
 
-    # توليد مفتاح وتشفير
     key = sibna.generate_key()
     ct  = sibna.encrypt(key, b"Hello")
     pt  = sibna.decrypt(key, ct)
     assert pt == b"Hello"
-
-    # جلسة مشفرة (تحتاج handshake مسبق)
-    ctx = sibna.Context()
-    ctx.generate_identity()
-    # ... (راجع README لخطوات X3DH الكاملة)
 """
 
 __version__ = "1.0.0"
@@ -56,15 +39,10 @@ import os
 import platform
 from typing import Optional, Tuple
 
-# ─── تحميل المكتبة ────────────────────────────────────────────────────────────
+# ── Library loading ────────────────────────────────────────────────────────────
 
 def _find_library() -> Optional[str]:
-    """
-    يبحث عن ملف المكتبة المُجمَّعة في المسارات المعتادة.
-    يعيد المسار إذا وجده، أو None إذا لم يجده.
-    """
     system = platform.system()
-
     if system == "Linux":
         names = ["libsibna_core.so"]
     elif system == "Darwin":
@@ -74,110 +52,64 @@ def _find_library() -> Optional[str]:
     else:
         return None
 
-    # المسارات التي نبحث فيها بالترتيب
     search_paths = [
-        os.path.dirname(__file__),                          # نفس مجلد هذا الملف
-        os.path.join(os.path.dirname(__file__), ".."),      # مجلد فوقه
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "core", "target", "release"),
+        os.path.dirname(os.path.dirname(__file__)),   # parent of sibna/
+        os.path.dirname(__file__),                     # sibna/ itself
+        os.path.join(os.path.dirname(__file__),
+                     "..", "..", "core", "target", "release"),
     ]
-
     for folder in search_paths:
         for name in names:
             candidate = os.path.normpath(os.path.join(folder, name))
             if os.path.isfile(candidate):
                 return candidate
-
     return None
 
 
-def _load_library() -> Optional[ctypes.CDLL]:
-    path = _find_library()
-    if path is None:
-        return None
-    try:
-        lib = ctypes.CDLL(path)
-        _configure_signatures(lib)
-        return lib
-    except OSError:
-        return None
-
-
-def _configure_signatures(lib: ctypes.CDLL) -> None:
-    """يحدد أنواع المعاملات والقيم المُعادة لكل دالة FFI."""
-
-    # ByteBuffer هو struct بثلاثة حقول: data*, len, capacity
-    # نستخدمه كـ output buffer في encrypt/decrypt
-
-    # sibna_generate_key(key: *mut u8) -> i32
+def _configure(lib: ctypes.CDLL) -> None:
     lib.sibna_generate_key.restype  = ctypes.c_int
     lib.sibna_generate_key.argtypes = [ctypes.c_char_p]
 
-    # sibna_random_bytes(len: usize, output: *mut u8) -> i32
     lib.sibna_random_bytes.restype  = ctypes.c_int
     lib.sibna_random_bytes.argtypes = [ctypes.c_size_t, ctypes.c_char_p]
 
-    # sibna_encrypt(key, pt, pt_len, ad, ad_len, out: *mut ByteBuffer) -> i32
     lib.sibna_encrypt.restype  = ctypes.c_int
     lib.sibna_encrypt.argtypes = [
-        ctypes.c_char_p,   # key
-        ctypes.c_char_p,   # plaintext
-        ctypes.c_size_t,   # plaintext_len
-        ctypes.c_char_p,   # associated_data (nullable)
-        ctypes.c_size_t,   # ad_len
-        ctypes.c_void_p,   # *mut ByteBuffer
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p,
     ]
-
-    # sibna_decrypt(key, ct, ct_len, ad, ad_len, out: *mut ByteBuffer) -> i32
     lib.sibna_decrypt.restype  = ctypes.c_int
     lib.sibna_decrypt.argtypes = [
-        ctypes.c_char_p,
-        ctypes.c_char_p,
-        ctypes.c_size_t,
-        ctypes.c_char_p,
-        ctypes.c_size_t,
-        ctypes.c_void_p,
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p,
     ]
-
-    # sibna_free_buffer(buf: *mut ByteBuffer) -> void
     lib.sibna_free_buffer.restype  = None
     lib.sibna_free_buffer.argtypes = [ctypes.c_void_p]
 
-    # sibna_version(out: *mut c_char, len: usize) -> i32
     lib.sibna_version.restype  = ctypes.c_int
     lib.sibna_version.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
 
-    # sibna_context_create(password, password_len, *mut *mut ctx) -> i32
     lib.sibna_context_create.restype  = ctypes.c_int
     lib.sibna_context_create.argtypes = [
-        ctypes.c_char_p,
-        ctypes.c_size_t,
-        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p),
     ]
-
-    # sibna_context_destroy(ctx) -> void
     lib.sibna_context_destroy.restype  = None
     lib.sibna_context_destroy.argtypes = [ctypes.c_void_p]
 
-    # sibna_generate_identity(ctx, ed25519_pub_out *mut u8, x25519_pub_out *mut u8) -> i32
     lib.sibna_generate_identity.restype  = ctypes.c_int
     lib.sibna_generate_identity.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_char_p,  # ed25519_pub (32 bytes output)
-        ctypes.c_char_p,  # x25519_pub  (32 bytes output)
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
     ]
+    lib.sibna_generate_prekey_bundle.restype  = ctypes.c_int
+    lib.sibna_generate_prekey_bundle.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
-    # sibna_perform_handshake(ctx, bundle, bundle_len, peer_id, peer_id_len, initiator) -> i32
     lib.sibna_perform_handshake.restype  = ctypes.c_int
     lib.sibna_perform_handshake.argtypes = [
         ctypes.c_void_p,
-        ctypes.c_char_p,
-        ctypes.c_size_t,
-        ctypes.c_char_p,
-        ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.c_size_t,
         ctypes.c_uint8,
     ]
-
-    # sibna_session_encrypt(ctx, session_id, sid_len, pt, pt_len, ad, ad_len, out) -> i32
     lib.sibna_session_encrypt.restype  = ctypes.c_int
     lib.sibna_session_encrypt.argtypes = [
         ctypes.c_void_p,
@@ -186,8 +118,6 @@ def _configure_signatures(lib: ctypes.CDLL) -> None:
         ctypes.c_char_p, ctypes.c_size_t,
         ctypes.c_void_p,
     ]
-
-    # sibna_session_decrypt(ctx, session_id, sid_len, ct, ct_len, ad, ad_len, out) -> i32
     lib.sibna_session_decrypt.restype  = ctypes.c_int
     lib.sibna_session_decrypt.argtypes = [
         ctypes.c_void_p,
@@ -197,31 +127,35 @@ def _configure_signatures(lib: ctypes.CDLL) -> None:
         ctypes.c_void_p,
     ]
 
-    # sibna_generate_prekey_bundle(ctx, out: *mut ByteBuffer) -> i32
-    lib.sibna_generate_prekey_bundle.restype  = ctypes.c_int
-    lib.sibna_generate_prekey_bundle.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+def _load() -> Optional[ctypes.CDLL]:
+    path = _find_library()
+    if not path:
+        return None
+    try:
+        lib = ctypes.CDLL(path)
+        _configure(lib)
+        return lib
+    except OSError:
+        return None
 
 
-_lib: Optional[ctypes.CDLL] = _load_library()
+_lib: Optional[ctypes.CDLL] = _load()
 
 
 def is_available() -> bool:
-    """يعيد True إذا كانت المكتبة المُجمَّعة محملة وجاهزة للاستخدام."""
+    """True if the native Rust library is loaded and ready."""
     return _lib is not None
 
 
 def library_path() -> Optional[str]:
-    """يعيد المسار الكامل للمكتبة المحملة، أو None إذا لم تُحمَّل."""
+    """Full path of the loaded library, or None."""
     return _find_library()
 
 
-# ─── ByteBuffer (struct مشترك مع Rust) ────────────────────────────────────────
+# ── ByteBuffer — mirrors Rust FFI struct ──────────────────────────────────────
 
 class _ByteBuffer(ctypes.Structure):
-    """
-    يطابق تعريف ByteBuffer في Rust FFI:
-        pub struct ByteBuffer { data: *mut u8, len: usize, capacity: usize }
-    """
     _fields_ = [
         ("data",     ctypes.POINTER(ctypes.c_uint8)),
         ("len",      ctypes.c_size_t),
@@ -231,65 +165,54 @@ class _ByteBuffer(ctypes.Structure):
     def to_bytes(self) -> bytes:
         if not self.data or self.len == 0:
             return b""
-        arr_type = ctypes.c_uint8 * self.len
-        return bytes(ctypes.cast(self.data, ctypes.POINTER(arr_type)).contents)
+        return bytes((ctypes.c_uint8 * self.len).from_address(
+            ctypes.addressof(self.data.contents)
+        ))
 
     def free(self) -> None:
-        if _lib is not None and self.data:
+        if _lib and self.data:
             _lib.sibna_free_buffer(ctypes.byref(self))
 
 
-# ─── الأخطاء ──────────────────────────────────────────────────────────────────
+# ── Errors ────────────────────────────────────────────────────────────────────
 
-_ERROR_MESSAGES = {
-    0:  "Success",
-    1:  "Invalid argument",
-    2:  "Invalid key",
-    3:  "Encryption failed",
-    4:  "Decryption failed",
-    5:  "Out of memory",
-    6:  "Invalid state",
-    7:  "Session not found",
-    8:  "Key not found",
-    9:  "Rate limit exceeded",
-    10: "Internal error",
-    11: "Buffer too small",
-    12: "Invalid ciphertext",
+_ERRORS = {
+    1: "Invalid argument", 2: "Invalid key", 3: "Encryption failed",
+    4: "Decryption failed", 5: "Out of memory", 6: "Invalid state",
+    7: "Session not found", 8: "Key not found", 9: "Rate limit exceeded",
+    10: "Internal error", 11: "Buffer too small", 12: "Invalid ciphertext",
     13: "Authentication failed",
 }
 
 
 class SibnaError(Exception):
-    """خطأ من المكتبة. يحتوي على كود الخطأ ورسالة توضيحية."""
-
+    """Error from the native library."""
     def __init__(self, code: int):
         self.code = code
-        message = _ERROR_MESSAGES.get(code, f"Unknown error (code={code})")
-        super().__init__(f"SibnaError({code}): {message}")
+        super().__init__(f"SibnaError({code}): {_ERRORS.get(code, f'Unknown ({code})')}")
 
 
 class LibraryNotFoundError(RuntimeError):
     """
-    تُرفع عند محاولة استخدام أي دالة تحتاج المكتبة وهي غير موجودة.
+    Raised when a function requires the native library and it is not found.
 
-    الحل: ابنِ المكتبة من مشروع sibna-protc:
+    Fix:
         cd sibna-protc/core
         cargo build --release --features ffi
-    ثم انسخ الملف الناتج إلى نفس مجلد هذا الملف.
+    Then place sibna_core.dll / libsibna_core.so / .dylib
+    next to the sibna/ package folder.
     """
-
     def __init__(self):
         super().__init__(
-            "المكتبة المُجمَّلة غير موجودة.\n"
-            "ابنِها من sibna-protc:\n"
+            "Native library not found.\n"
+            "Build it from sibna-protc:\n"
             "    cd sibna-protc/core\n"
             "    cargo build --release --features ffi\n"
-            "ثم انسخ الملف الناتج (sibna_core.dll / libsibna_core.so / .dylib) "
-            "إلى نفس مجلد هذا الملف."
+            "Then place the output file next to this SDK."
         )
 
 
-def _require_lib() -> ctypes.CDLL:
+def _require() -> ctypes.CDLL:
     if _lib is None:
         raise LibraryNotFoundError()
     return _lib
@@ -300,42 +223,39 @@ def _check(code: int) -> None:
         raise SibnaError(code)
 
 
-# ─── دوال مساعدة عامة ─────────────────────────────────────────────────────────
+# ── Standalone crypto ─────────────────────────────────────────────────────────
 
 def version() -> str:
-    """يعيد رقم إصدار بروتوكول Sibna من المكتبة."""
-    lib = _require_lib()
+    """Protocol version string from the native library."""
+    lib = _require()
     buf = ctypes.create_string_buffer(32)
     _check(lib.sibna_version(buf, 32))
-    return buf.value.decode("utf-8")
+    return buf.value.decode()
 
 
 def generate_key() -> bytes:
     """
-    يولّد مفتاح تشفير عشوائي بحجم 32 بايت (256 بت).
+    Generate a cryptographically secure random 32-byte encryption key.
 
     Returns:
-        bytes: مفتاح 32 بايت صالح للاستخدام مع encrypt() و decrypt().
+        bytes: 32-byte key for use with encrypt() / decrypt().
     """
-    lib = _require_lib()
-    key = ctypes.create_string_buffer(32)
-    _check(lib.sibna_generate_key(key))
-    return key.raw
+    lib = _require()
+    buf = ctypes.create_string_buffer(32)
+    _check(lib.sibna_generate_key(buf))
+    return buf.raw
 
 
 def random_bytes(length: int) -> bytes:
     """
-    يولّد عدداً عشوائياً من البايتات باستخدام المولّد الآمن في المكتبة.
+    Generate cryptographically secure random bytes.
 
     Args:
-        length: عدد البايتات المطلوبة (يجب أن يكون أكبر من 0).
-
-    Returns:
-        bytes: بايتات عشوائية.
+        length: Number of bytes (must be > 0).
     """
     if length <= 0:
-        raise ValueError("length يجب أن يكون أكبر من 0")
-    lib = _require_lib()
+        raise ValueError("length must be > 0")
+    lib = _require()
     buf = ctypes.create_string_buffer(length)
     _check(lib.sibna_random_bytes(length, buf))
     return buf.raw
@@ -347,33 +267,33 @@ def encrypt(
     associated_data: Optional[bytes] = None,
 ) -> bytes:
     """
-    يشفّر البيانات باستخدام ChaCha20-Poly1305.
+    Encrypt data with ChaCha20-Poly1305.
 
     Args:
-        key:             مفتاح 32 بايت (من generate_key() أو مفتاح خاص بك).
-        plaintext:       البيانات المراد تشفيرها.
-        associated_data: بيانات إضافية مُصادَق عليها لكن غير مشفرة (اختياري).
-                         يجب تمريرها بنفس القيمة عند فك التشفير.
+        key:             32-byte key from generate_key().
+        plaintext:       Data to encrypt (must be non-empty).
+        associated_data: Optional authenticated-but-not-encrypted context.
+                         Must pass the same value to decrypt().
 
     Returns:
-        bytes: البيانات المشفرة. تحتوي على nonce + ciphertext + tag.
+        bytes: nonce (12) + ciphertext + tag (16).
 
     Raises:
-        ValueError:    إذا كان المفتاح ليس 32 بايت أو plaintext فارغة.
-        SibnaError:    إذا فشل التشفير.
-        LibraryNotFoundError: إذا لم تُحمَّل المكتبة.
+        ValueError:          Wrong key size or empty plaintext.
+        SibnaError(3):       Encryption failed.
+        LibraryNotFoundError if library not loaded.
     """
-    lib = _require_lib()
+    lib = _require()
     if len(key) != 32:
-        raise ValueError(f"المفتاح يجب أن يكون 32 بايت، وصل {len(key)}")
+        raise ValueError(f"Key must be 32 bytes (got {len(key)})")
     if not plaintext:
-        raise ValueError("plaintext لا يمكن أن تكون فارغة")
-
-    ad_ptr = associated_data or None
-    ad_len = len(associated_data) if associated_data else 0
-
+        raise ValueError("plaintext must not be empty")
     out = _ByteBuffer()
-    _check(lib.sibna_encrypt(key, plaintext, len(plaintext), ad_ptr, ad_len, ctypes.byref(out)))
+    _check(lib.sibna_encrypt(
+        key, plaintext, len(plaintext),
+        associated_data, len(associated_data) if associated_data else 0,
+        ctypes.byref(out),
+    ))
     try:
         return out.to_bytes()
     finally:
@@ -386,118 +306,122 @@ def decrypt(
     associated_data: Optional[bytes] = None,
 ) -> bytes:
     """
-    يفك تشفير البيانات باستخدام ChaCha20-Poly1305.
+    Decrypt data with ChaCha20-Poly1305.
 
     Args:
-        key:             نفس المفتاح 32 بايت المستخدم في encrypt().
-        ciphertext:      البيانات المشفرة الصادرة من encrypt().
-        associated_data: نفس associated_data المستخدمة في encrypt() (إذا كانت موجودة).
+        key:             Same 32-byte key used in encrypt().
+        ciphertext:      Output of encrypt().
+        associated_data: Same value passed to encrypt() (if any).
 
     Returns:
-        bytes: البيانات الأصلية.
+        bytes: Original plaintext.
 
     Raises:
-        SibnaError(13): إذا كانت البيانات منقحة أو المفتاح خاطئ (Authentication failed).
-        SibnaError(12): إذا كان ciphertext غير صالح.
-        LibraryNotFoundError: إذا لم تُحمَّل المكتبة.
+        SibnaError(13): Data tampered or wrong key (Authentication failed).
+        SibnaError(12): Ciphertext is invalid/truncated.
+        LibraryNotFoundError if library not loaded.
     """
-    lib = _require_lib()
+    lib = _require()
     if len(key) != 32:
-        raise ValueError(f"المفتاح يجب أن يكون 32 بايت، وصل {len(key)}")
+        raise ValueError(f"Key must be 32 bytes (got {len(key)})")
     if not ciphertext:
-        raise ValueError("ciphertext لا يمكن أن تكون فارغة")
-
-    ad_ptr = associated_data or None
-    ad_len = len(associated_data) if associated_data else 0
-
+        raise ValueError("ciphertext must not be empty")
     out = _ByteBuffer()
-    _check(lib.sibna_decrypt(key, ciphertext, len(ciphertext), ad_ptr, ad_len, ctypes.byref(out)))
+    _check(lib.sibna_decrypt(
+        key, ciphertext, len(ciphertext),
+        associated_data, len(associated_data) if associated_data else 0,
+        ctypes.byref(out),
+    ))
     try:
         return out.to_bytes()
     finally:
         out.free()
 
 
-# ─── Context — إدارة الهوية والجلسات ─────────────────────────────────────────
+# ── Context ────────────────────────────────────────────────────────────────────
 
 class Context:
     """
-    السياق الرئيسي للبروتوكول. يدير:
-    - مفاتيح الهوية (Ed25519 + X25519)
-    - جلسات Double Ratchet مع peers
-    - Keystore مشفر بكلمة مرور اختيارية
+    Manages identity keypairs and Double Ratchet sessions.
 
-    ملاحظة حول كلمة المرور:
-        إذا استخدمت كلمة مرور، يجب أن تحتوي على:
-        - حرف كبير واحد على الأقل
-        - حرف صغير واحد على الأقل
-        - رقم واحد على الأقل
-        - طول 8 أحرف على الأقل
-        (هذه قواعد المكتبة الداخلية وليست اختياراتنا)
+    Password rules (enforced by Rust core):
+        Must contain uppercase + lowercase + digit, minimum 8 characters.
+
+    Usage:
+        ctx = Context(password=b"MyPass1!")
+        ed_pub, x_pub = ctx.generate_identity()
+        bundle = ctx.generate_prekey_bundle()
+
+        # After exchanging bundles with a peer:
+        ctx.perform_handshake(peer_id=peer_ed_pub, peer_bundle=peer_bundle, initiator=True)
+        ct = ctx.session_encrypt(peer_ed_pub, b"Hello!")
+        pt = ctx.session_decrypt(peer_ed_pub, ct)
+
+        ctx.close()
     """
 
     def __init__(self, password: Optional[bytes] = None):
         """
         Args:
-            password: كلمة مرور لتشفير الـ keystore (اختياري).
-                      إذا لم تُمرَّر، يُولَّد مفتاح عشوائي.
+            password: Optional master password for the local keystore.
+                      If None, a random storage key is generated.
 
         Raises:
-            SibnaError(10): إذا كانت كلمة المرور ضعيفة جداً.
-            LibraryNotFoundError: إذا لم تُحمَّل المكتبة.
+            SibnaError(10): Password too weak.
+            LibraryNotFoundError: Library not loaded.
         """
-        lib = _require_lib()
+        lib = _require()
         handle = ctypes.c_void_p()
-        pwd_ptr = password or None
-        pwd_len = len(password) if password else 0
-        _check(lib.sibna_context_create(pwd_ptr, pwd_len, ctypes.byref(handle)))
+        _check(lib.sibna_context_create(
+            password, len(password) if password else 0,
+            ctypes.byref(handle),
+        ))
         self._handle = handle
-        self._lib = lib
+        self._lib    = lib
+        self._closed = False
 
-    def __del__(self):
-        if hasattr(self, "_handle") and self._handle and hasattr(self, "_lib"):
-            self._lib.sibna_context_destroy(self._handle)
-            self._handle = None
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
 
     def generate_identity(self) -> Tuple[bytes, bytes]:
         """
-        يولّد زوج مفاتيح هوية جديد ويحفظه في الـ keystore.
+        Generate an Ed25519 + X25519 identity keypair stored in the keystore.
 
         Returns:
-            Tuple[bytes, bytes]: (ed25519_public_key, x25519_public_key)
-            كلاهما 32 بايت.
-            - ed25519_public_key: للتوقيع والتحقق من الهوية
-            - x25519_public_key:  للـ X3DH key agreement
+            (ed25519_public_key, x25519_public_key) — both 32 bytes.
+            - ed25519_public_key: for signing / identity verification
+            - x25519_public_key:  for X3DH key agreement
 
         Raises:
-            SibnaError: إذا فشل التوليد.
+            SibnaError: on failure.
         """
-        ed_pub = ctypes.create_string_buffer(32)
-        x_pub  = ctypes.create_string_buffer(32)
-        _check(self._lib.sibna_generate_identity(self._handle, ed_pub, x_pub))
-        return ed_pub.raw, x_pub.raw
+        self._check_open()
+        ed_buf = ctypes.create_string_buffer(32)
+        x_buf  = ctypes.create_string_buffer(32)
+        _check(self._lib.sibna_generate_identity(self._handle, ed_buf, x_buf))
+        return ed_buf.raw, x_buf.raw
 
     def generate_prekey_bundle(self) -> bytes:
         """
-        يولّد PreKey Bundle لرفعه إلى سيرفر المفاتيح (Prekey Server).
+        Generate a PreKey Bundle to upload to the prekey server.
 
-        يجب استدعاء generate_identity() أولاً.
-
-        PreKey Bundle يحتوي على:
-        - مفتاح الهوية (identity key)
-        - Signed PreKey مع توقيعه
-        - OneTime PreKey اختياري
+        Must call generate_identity() first.
 
         Returns:
-            bytes: البيانات المسلسلة للـ PreKey Bundle.
-                   يمكن رفعها مباشرة عبر SibnaClient.upload_prekey()
+            bytes: Serialized bundle — pass directly to your server
+                   or to SibnaClient.upload_prekey(bundle.hex()).
 
         Raises:
-            SibnaError(8): إذا لم تُولَّد الهوية بعد (Key not found).
-            SibnaError: لأسباب أخرى.
+            SibnaError(8): No identity generated yet (Key not found).
         """
+        self._check_open()
         out = _ByteBuffer()
-        _check(self._lib.sibna_generate_prekey_bundle(self._handle, ctypes.byref(out)))
+        _check(self._lib.sibna_generate_prekey_bundle(
+            self._handle, ctypes.byref(out),
+        ))
         try:
             return out.to_bytes()
         finally:
@@ -510,26 +434,29 @@ class Context:
         initiator: bool,
     ) -> None:
         """
-        ينفّذ X3DH Handshake مع peer ويُنشئ جلسة Double Ratchet.
+        Run X3DH handshake and create a Double Ratchet session.
 
-        بعد نجاح هذه الدالة يمكن استخدام session_encrypt() / session_decrypt()
-        مع نفس peer_id.
+        After success, use session_encrypt() / session_decrypt() with peer_id.
 
         Args:
-            peer_id:     معرّف الـ peer (بايتات). يُستخدم كـ session ID لاحقاً.
-            peer_bundle: PreKey Bundle الخاص بالـ peer (من سيرفر المفاتيح).
-            initiator:   True إذا كنت أنت من يبدأ الاتصال، False إذا كنت المستقبِل.
+            peer_id:     Peer's Ed25519 public key (used as session identifier).
+            peer_bundle: Peer's PreKey Bundle bytes (from prekey server).
+            initiator:   True if you start the conversation, False if responding.
 
         Raises:
-            SibnaError(2): إذا كان bundle غير صالح أو التوقيع خاطئ.
-            SibnaError(6): إذا كانت الحالة غير صالحة.
-            SibnaError: لأسباب أخرى.
+            SibnaError(2): Invalid bundle or bad signature.
+            SibnaError(6): Context in invalid state.
         """
+        self._check_open()
+        if not peer_id:
+            raise ValueError("peer_id must not be empty")
+        if not peer_bundle:
+            raise ValueError("peer_bundle must not be empty")
         _check(self._lib.sibna_perform_handshake(
             self._handle,
             peer_bundle, len(peer_bundle),
             peer_id,     len(peer_id),
-            ctypes.c_uint8(1 if initiator else 0),
+            1 if initiator else 0,
         ))
 
     def session_encrypt(
@@ -539,34 +466,34 @@ class Context:
         associated_data: Optional[bytes] = None,
     ) -> bytes:
         """
-        يشفّر رسالة عبر جلسة Double Ratchet موجودة.
+        Encrypt a message over an existing Double Ratchet session.
 
-        يجب استدعاء perform_handshake() مع نفس peer_id أولاً.
-
-        المفتاح يتغير تلقائياً مع كل رسالة (Double Ratchet).
+        The ratchet key advances with every message — forward secrecy
+        is automatic.
 
         Args:
-            peer_id:         معرّف الـ peer (نفسه المستخدم في perform_handshake).
-            plaintext:       الرسالة المراد تشفيرها.
-            associated_data: بيانات إضافية مُصادَق عليها (اختياري).
+            peer_id:         Same bytes used in perform_handshake().
+            plaintext:       Message to encrypt (non-empty).
+            associated_data: Optional authenticated context (e.g. message ID).
 
         Returns:
-            bytes: الرسالة المشفرة.
+            bytes: Encrypted message. Pass to peer's session_decrypt().
 
         Raises:
-            SibnaError(7): إذا لم تُنشأ جلسة مع هذا الـ peer.
-            SibnaError(9): إذا تجاوزت حد الرسائل (Rate limit).
-            LibraryNotFoundError: إذا لم تُحمَّل المكتبة.
+            SibnaError(7): No session for this peer. Call perform_handshake() first.
+            SibnaError(9): Rate limit exceeded.
         """
-        ad_ptr = associated_data or None
-        ad_len = len(associated_data) if associated_data else 0
-
+        self._check_open()
+        if not peer_id:
+            raise ValueError("peer_id must not be empty")
+        if not plaintext:
+            raise ValueError("plaintext must not be empty")
         out = _ByteBuffer()
         _check(self._lib.sibna_session_encrypt(
             self._handle,
             peer_id,   len(peer_id),
             plaintext, len(plaintext),
-            ad_ptr,    ad_len,
+            associated_data, len(associated_data) if associated_data else 0,
             ctypes.byref(out),
         ))
         try:
@@ -581,30 +508,32 @@ class Context:
         associated_data: Optional[bytes] = None,
     ) -> bytes:
         """
-        يفك تشفير رسالة عبر جلسة Double Ratchet موجودة.
+        Decrypt a message from a Double Ratchet session.
 
         Args:
-            peer_id:         معرّف الـ peer.
-            ciphertext:      الرسالة المشفرة (من session_encrypt() على الطرف الآخر).
-            associated_data: نفس associated_data المستخدمة عند التشفير.
+            peer_id:         Peer identifier (same as used in perform_handshake).
+            ciphertext:      Encrypted message from the peer's session_encrypt().
+            associated_data: Same value passed during encryption (if any).
 
         Returns:
-            bytes: الرسالة الأصلية.
+            bytes: Original plaintext.
 
         Raises:
-            SibnaError(13): إذا كانت الرسالة منقحة (Authentication failed).
-            SibnaError(7):  إذا لم تُنشأ جلسة مع هذا الـ peer.
-            SibnaError(12): إذا كان ciphertext تالفاً.
+            SibnaError(13): Message tampered or wrong session.
+            SibnaError(7):  Session not found.
+            SibnaError(12): Ciphertext too short / corrupted.
         """
-        ad_ptr = associated_data or None
-        ad_len = len(associated_data) if associated_data else 0
-
+        self._check_open()
+        if not peer_id:
+            raise ValueError("peer_id must not be empty")
+        if not ciphertext:
+            raise ValueError("ciphertext must not be empty")
         out = _ByteBuffer()
         _check(self._lib.sibna_session_decrypt(
             self._handle,
             peer_id,    len(peer_id),
             ciphertext, len(ciphertext),
-            ad_ptr,     ad_len,
+            associated_data, len(associated_data) if associated_data else 0,
             ctypes.byref(out),
         ))
         try:
@@ -612,24 +541,29 @@ class Context:
         finally:
             out.free()
 
+    def close(self) -> None:
+        """Free native memory and zero all keys. Call when done."""
+        if not self._closed and self._handle:
+            self._lib.sibna_context_destroy(self._handle)
+            self._closed = True
 
-# ─── Exports ───────────────────────────────────────────────────────────────────
+    def _check_open(self) -> None:
+        if self._closed:
+            raise SibnaError(6)  # invalid state
+
+    def __del__(self):
+        self.close()
+
+    def __repr__(self) -> str:
+        return f"<sibna.Context closed={self._closed}>"
+
+
+# ── Exports ────────────────────────────────────────────────────────────────────
 
 __all__ = [
-    # الحالة
-    "is_available",
-    "library_path",
-    "version",
-    # الأخطاء
-    "SibnaError",
-    "LibraryNotFoundError",
-    # دوال التشفير
-    "generate_key",
-    "random_bytes",
-    "encrypt",
-    "decrypt",
-    # الـ Context (هوية + جلسات)
+    "is_available", "library_path", "version",
+    "SibnaError", "LibraryNotFoundError",
+    "generate_key", "random_bytes", "encrypt", "decrypt",
     "Context",
-    # الإصدار
     "__version__",
 ]
