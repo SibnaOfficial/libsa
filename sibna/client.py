@@ -36,7 +36,7 @@ Usage (async + WebSocket):
     asyncio.run(main())
 """
 
-__version__ = "1.6.0"
+__version__ = "1.0.0"
 
 import asyncio
 import hashlib
