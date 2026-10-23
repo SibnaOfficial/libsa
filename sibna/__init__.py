@@ -51,6 +51,7 @@ from .crypto import (
     derive_identity_keys,
     KEY_LENGTH,
     NONCE_LENGTH,
+    blake3_hash,
 )
 from .x3dh import (
     PreKeyBundle,

@@ -36,6 +36,12 @@ PACKAGING_FILES = {"__init__.py"}
 # Within __init__.py, the version line is libsa packaging metadata.
 VERSION_LINE_RE = re.compile(r"^__version__\s*=\s*.*$", re.MULTILINE)
 
+# Matches `from .module import name1, name2, ...` import blocks in __init__.py.
+IMPORT_BLOCK_RE = re.compile(
+    r"from\s+\.(\w+)\s*import\s*\((.*?)\)",
+    re.DOTALL,
+)
+
 
 def runtime_files(sibna_dir: Path) -> set[str]:
     """Return the set of intended runtime file names in a sibna/ package dir.
@@ -59,10 +65,38 @@ def file_hash(path: Path) -> str:
     return hashlib.sha256(read_normalized(path)).hexdigest()
 
 
-def normalize_init_py(path: Path) -> str:
-    """Strip the libsa-specific __version__ line before comparing __init__.py."""
+def _import_blocks(text: str) -> dict[str, set[str]]:
+    """Parse `from .module import ...` blocks into {module: set(names)}."""
+    blocks: dict[str, set[str]] = {}
+    for mod, block in IMPORT_BLOCK_RE.findall(text):
+        names = set()
+        for line in block.splitlines():
+            line = line.strip().rstrip(",")
+            if line and not line.startswith("#"):
+                name = line.strip().rstrip(",")
+                if name:
+                    names.add(name)
+        blocks[mod] = names
+    return blocks
+
+
+def _strip_import_blocks(text: str) -> str:
+    """Return __init__.py text with all import blocks and version line removed."""
+    text = VERSION_LINE_RE.sub("", text)
+    text = IMPORT_BLOCK_RE.sub("", text)
+    return text
+
+
+def normalize_init_py(path: Path) -> tuple[str, dict[str, set[str]]]:
+    """Return (__init__.py content without imports/version, {module: set(names)}).
+
+    The import map lets us verify that libsa exports at least everything
+    upstream exports (libsa may add packaging-specific exports).
+    """
     text = read_normalized(path).decode("utf-8-sig")
-    return VERSION_LINE_RE.sub('__version__ = "<PACKAGING>"', text)
+    blocks = _import_blocks(text)
+    stripped = _strip_import_blocks(text)
+    return stripped, blocks
 
 
 def check_parity(sibna_protc_sdk_dir: Path) -> bool:
@@ -105,18 +139,43 @@ def check_parity(sibna_protc_sdk_dir: Path) -> bool:
         sp_file = sibna_protc_sibna_dir / fname
 
         if fname in PACKAGING_FILES:
-            # Packaging metadata: compare content ignoring the __version__ line.
-            h1 = hashlib.sha256(normalize_init_py(libsa_file).encode()).hexdigest()
-            h2 = hashlib.sha256(normalize_init_py(sp_file).encode()).hexdigest()
+            # Packaging metadata: strip import blocks + version line, then
+            # compare the remaining content. Also verify that upstream's
+            # imported names are a subset of libsa's (libsa may add
+            # packaging-specific exports like blake3_hash).
+            libsa_stripped, libsa_blocks = normalize_init_py(libsa_file)
+            sp_stripped, sp_blocks = normalize_init_py(sp_file)
+
+            missing_names: set[str] = set()
+            for mod, names in sp_blocks.items():
+                libsa_mod_names = libsa_blocks.get(mod, set())
+                missing = names - libsa_mod_names
+                if missing:
+                    missing_names.update(f"{mod}.{n}" for n in missing)
+            if missing_names:
+                print(f"MISSING EXPORTS in sibna/__init__.py: {sorted(missing_names)}")
+                all_match = False
+
+            if libsa_stripped != sp_stripped:
+                print(
+                    f"DIFFER: sibna/{fname} non-import content != "
+                    f"sibna-protc/sdks/python/sibna/{fname} non-import content"
+                )
+                all_match = False
+            elif not missing_names:
+                print(
+                    f"OK: sibna/{fname} matches (version-normalized, "
+                    f"libsa may add packaging exports)"
+                )
         else:
             h1 = file_hash(libsa_file)
             h2 = file_hash(sp_file)
 
-        if h1 != h2:
-            print(f"DIFFER: sibna/{fname} != sibna-protc/sdks/python/sibna/{fname}")
-            all_match = False
-        else:
-            print(f"OK: sibna/{fname} matches sibna-protc/sdks/python/sibna/{fname}")
+            if h1 != h2:
+                print(f"DIFFER: sibna/{fname} != sibna-protc/sdks/python/sibna/{fname}")
+                all_match = False
+            else:
+                print(f"OK: sibna/{fname} matches sibna-protc/sdks/python/sibna/{fname}")
 
     return all_match
 
