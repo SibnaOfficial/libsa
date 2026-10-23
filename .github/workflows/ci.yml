@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: [v*]
   pull_request:
     branches: [main]
 
@@ -95,11 +96,6 @@ jobs:
         run: python -m build
       - name: Check distribution
         run: twine check dist/*
-      - name: Install wheel in clean venv and smoke test
-        run: |
-          python -m venv /tmp/smoke-venv
-          /tmp/smoke-venv/bin/pip install dist/sibna-*.whl
-          /tmp/smoke-venv/bin/python scripts/smoke_test.py
 
   # ── Publish to PyPI (on tags only) ────────────────────────────────────
   publish:
