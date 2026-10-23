@@ -49,7 +49,7 @@ Documentation = "https://github.com/SibnaOfficial/libsa#readme"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sibna*"]
+include = ["sibna"]
 
 [tool.mypy]
 python_version = "3.13"
