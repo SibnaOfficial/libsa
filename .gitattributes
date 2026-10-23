@@ -1,0 +1,8 @@
+*.yml text eol=lf
+*.yaml text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
