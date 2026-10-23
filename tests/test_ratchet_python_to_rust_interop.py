@@ -30,6 +30,8 @@ from sibna import (
 )
 from sibna.x3dh import x3dh_initiator
 
+pytestmark = pytest.mark.interop
+
 # Fixed X25519 secrets matching the Rust interop vectors
 ALICE_ID_SK = bytes([0x61] * 32)
 BOB_ID_SK = bytes([0x62] * 32)

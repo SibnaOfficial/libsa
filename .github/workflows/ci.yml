@@ -76,7 +76,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run pytest (exclude interop tests requiring Rust core)
-        run: python -m pytest tests/ -v --tb=long
+        run: python -m pytest tests/ -v --tb=long -m "not interop"
 
   # ── Packaging ─────────────────────────────────────────────────────────
   package:

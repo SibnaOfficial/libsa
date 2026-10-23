@@ -38,6 +38,8 @@ from sibna.x3dh import x3dh_initiator, x3dh_responder
 
 CORE_DIR = Path(__file__).resolve().parents[3] / "core"
 
+pytestmark = pytest.mark.interop
+
 # Fixed X25519 seeds matching the Rust harness so both sides use the same
 # long-term keys for the hybrid handshake cross-checks.
 BOB_IDENTITY_SK = bytes([0x62] * 32)

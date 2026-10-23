@@ -293,6 +293,8 @@ def _bob_x3dh_with_alice(
 class TestFullFlowHTTP:
     """Full Alice → Server → Bob flow over HTTP."""
 
+    pytestmark = pytest.mark.interop
+
     @classmethod
     def setup_class(cls):
         cls.server_proc = _start_server()
@@ -582,6 +584,8 @@ class TestFullFlowHTTP:
 
 class TestWebSocketFlow:
     """WebSocket real-time relay between Python clients."""
+
+    pytestmark = pytest.mark.interop
 
     @classmethod
     def setup_class(cls):
