@@ -479,7 +479,10 @@ async def initiator_handshake(
     stealth_bundle = decode_stealth_bundle(bundle_payload)
 
     # 5. Verify responder identity.
-    if expected_peer_identity is not None and stealth_bundle["responder_ed25519_pub"] != expected_peer_identity:
+    if (
+        expected_peer_identity is not None
+        and stealth_bundle["responder_ed25519_pub"] != expected_peer_identity
+    ):
         raise ProtocolError("Peer identity mismatch — possible MITM")
 
     # 6. Transcript binding (matches X3DH internal transcript order).

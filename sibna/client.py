@@ -344,40 +344,40 @@ class AsyncSibnaClient:
         connector = aiohttp.TCPConnector(ssl=ssl_ctx) if ssl_ctx else None
 
         ws_url = f"{self.ws_server}/ws?token={self.jwt_token}"
-        async with aiohttp.ClientSession(connector=connector) as session, \
-                    session.ws_connect(ws_url) as ws:
-                self._ws = ws
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.BINARY:
-                        try:
-                            ws_msg = json.loads(msg.data)
-                            msg_type = ws_msg.get("type", "envelope")
-                            if msg_type == "envelope":
-                                envelope = ws_msg.get("envelope", ws_msg)
-                                if verify_signed_envelope(envelope):
-                                    msg_id = envelope.get("message_id")
-                                    if msg_id:
-                                        await ws.send_bytes(
-                                            json.dumps(
-                                                {"type": "ack", "message_id": msg_id}
-                                            ).encode()
-                                        )
-                                    if self._on_message:
-                                        await self._on_message(envelope)
-                                else:
-                                    # Invalid signature — drop.
-                                    pass
-                            elif msg_type == "ack":
-                                # Delivery acknowledgement.
+        async with (
+            aiohttp.ClientSession(connector=connector) as session,
+            session.ws_connect(ws_url) as ws,
+        ):
+            self._ws = ws
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    try:
+                        ws_msg = json.loads(msg.data)
+                        msg_type = ws_msg.get("type", "envelope")
+                        if msg_type == "envelope":
+                            envelope = ws_msg.get("envelope", ws_msg)
+                            if verify_signed_envelope(envelope):
+                                msg_id = envelope.get("message_id")
+                                if msg_id:
+                                    await ws.send_bytes(
+                                        json.dumps({"type": "ack", "message_id": msg_id}).encode()
+                                    )
                                 if self._on_message:
-                                    await self._on_message(ws_msg)
-                            elif msg_type == "webrtc":
-                                if self._on_message:
-                                    await self._on_message(ws_msg)
-                        except Exception as exc:
-                            raise NetworkError(f"WebSocket receive error: {exc}") from exc
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        raise NetworkError(f"WebSocket error: {ws.exception()}")
+                                    await self._on_message(envelope)
+                            else:
+                                # Invalid signature — drop.
+                                pass
+                        elif msg_type == "ack":
+                            # Delivery acknowledgement.
+                            if self._on_message:
+                                await self._on_message(ws_msg)
+                        elif msg_type == "webrtc":
+                            if self._on_message:
+                                await self._on_message(ws_msg)
+                    except Exception as exc:
+                        raise NetworkError(f"WebSocket receive error: {exc}") from exc
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    raise NetworkError(f"WebSocket error: {ws.exception()}")
 
     async def send(
         self,
