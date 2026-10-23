@@ -35,10 +35,9 @@ Bundles with an invalid SPK signature are rejected *before* any DH computation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
 import struct
 import time
+from dataclasses import dataclass, field
 
 from . import constants as C
 from .crypto import (
@@ -48,7 +47,6 @@ from .crypto import (
     hkdf,
     ml_kem_768_decapsulate,
     ml_kem_768_encapsulate,
-    ml_kem_768_keypair,
 )
 from .errors import CryptoError, ValidationError
 
@@ -84,7 +82,7 @@ class PreKeyBundle:
     x25519_identity_key: bytes
     signed_prekey: bytes
     signed_prekey_signature: bytes
-    onetime_prekey: Optional[bytes] = None
+    onetime_prekey: bytes | None = None
     bundle_id: bytes = field(default_factory=lambda: bytes(16))
     timestamp: int = field(default_factory=lambda: int(time.time()))
     expiration: int = field(default_factory=lambda: int(time.time()) + 30 * 86400)  # 30 days
@@ -92,8 +90,8 @@ class PreKeyBundle:
     device_id: int = field(default_factory=lambda: 0)
     root_identity_key: bytes = bytes(32)
     device_signature: bytes = bytes(64)
-    pq_public_key: Optional[bytes] = None
-    pq_signed_prekey_signature: Optional[bytes] = None
+    pq_public_key: bytes | None = None
+    pq_signed_prekey_signature: bytes | None = None
     bundle_signature: bytes = bytes(64)
 
     def verify_spk_signature(self) -> bool:
@@ -297,7 +295,7 @@ class X3DHResult:
 
     shared_secret: bytes
     dh_results: list[bytes]
-    pq_ciphertext: Optional[bytes] = None
+    pq_ciphertext: bytes | None = None
     session_id: str = ""
 
 
@@ -422,14 +420,14 @@ def x3dh_initiator(
 def x3dh_responder(
     identity_keypair: X25519KeyPair,
     signed_prekeypair: X25519KeyPair,
-    onetime_prekeypair: Optional[X25519KeyPair],
+    onetime_prekeypair: X25519KeyPair | None,
     peer_identity: bytes,
     peer_ephemeral: bytes,
     our_device_id: bytes = bytes(16),
     peer_device_id: bytes = bytes(16),
     transcript_hash_ext: bytes = bytes(32),
-    our_pq_secret_key: Optional[bytes] = None,
-    peer_pq_ciphertext: Optional[bytes] = None,
+    our_pq_secret_key: bytes | None = None,
+    peer_pq_ciphertext: bytes | None = None,
 ) -> X3DHResult:
     """X3DH key agreement — responder side.
 
@@ -516,10 +514,10 @@ def generate_peer_bundle(
     identity_ed: Ed25519KeyPair,
     identity_x25519: X25519KeyPair,
     signed_prekey: X25519KeyPair,
-    onetime_prekey: Optional[X25519KeyPair] = None,
+    onetime_prekey: X25519KeyPair | None = None,
     device_id_bytes: bytes = bytes(16),
-    root_identity_key: Optional[bytes] = None,
-    pq_keypair: Optional[tuple[bytes, bytes]] = None,
+    root_identity_key: bytes | None = None,
+    pq_keypair: tuple[bytes, bytes] | None = None,
 ) -> PreKeyBundle:
     """Build a signed PreKeyBundle for publishing to a peer/relay.
 
@@ -602,7 +600,7 @@ def generate_peer_bundle(
 __all__ = [
     "PreKeyBundle",
     "X3DHResult",
+    "generate_peer_bundle",
     "x3dh_initiator",
     "x3dh_responder",
-    "generate_peer_bundle",
 ]

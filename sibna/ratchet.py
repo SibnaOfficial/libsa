@@ -41,11 +41,9 @@ keyed by (remote_dh_public, message_number), single-use, evicted oldest-first.
 
 from __future__ import annotations
 
-import os
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
 
 from . import constants as C
 from .crypto import (
@@ -76,7 +74,7 @@ class ChainKey:
     created_at: float = field(default_factory=time.time)
     max_messages: int = C.MAX_CHAIN_MESSAGES
 
-    def next_message_key(self) -> Optional[Tuple[bytes, "ChainKey"]]:
+    def next_message_key(self) -> tuple[bytes, ChainKey] | None:
         """Derive next message key and advance the chain."""
         if self.index >= self.max_messages:
             return None
@@ -107,11 +105,11 @@ class DoubleRatchet:
     def __init__(
         self,
         root_key: bytes,
-        sending_chain: Optional[ChainKey] = None,
-        receiving_chain: Optional[ChainKey] = None,
-        dh_local_private: Optional[bytes] = None,
-        dh_local_public: Optional[bytes] = None,
-        dh_remote_public: Optional[bytes] = None,
+        sending_chain: ChainKey | None = None,
+        receiving_chain: ChainKey | None = None,
+        dh_local_private: bytes | None = None,
+        dh_local_public: bytes | None = None,
+        dh_remote_public: bytes | None = None,
         previous_counter: int = 0,
         max_skip: int = C.MAX_SKIPPED_MESSAGES,
     ):
@@ -125,7 +123,7 @@ class DoubleRatchet:
         self.dh_remote_public = dh_remote_public
         self.previous_counter = previous_counter
         self.max_skip = max_skip
-        self.skipped_keys: Dict[Tuple[bytes, int], bytes] = {}
+        self.skipped_keys: dict[tuple[bytes, int], bytes] = {}
         self.messages_sent = 0
         self.messages_received = 0
         self.created_at = time.time()
@@ -138,7 +136,7 @@ class DoubleRatchet:
         local_dh_private: bytes,
         remote_dh_public: bytes,
         role_is_initiator: bool,
-    ) -> "DoubleRatchet":
+    ) -> DoubleRatchet:
         """Create initial DoubleRatchet state from X3DH shared secret."""
         if len(shared_secret) != C.KEY_LENGTH:
             raise ValidationError("shared_secret must be 32 bytes")
@@ -176,7 +174,7 @@ class DoubleRatchet:
 
     # ── Root key KDF ──────────────────────────────────────────────────
 
-    def _kdf_rk(self, dh_out: bytes) -> Tuple[bytes, bytes]:
+    def _kdf_rk(self, dh_out: bytes) -> tuple[bytes, bytes]:
         okm = hkdf(
             dh_out,
             salt=self.root_key,
@@ -208,7 +206,7 @@ class DoubleRatchet:
 
     # ── Skipped keys ──────────────────────────────────────────────────
 
-    def _try_skipped_message_key(self, dh_public: bytes, message_number: int) -> Optional[bytes]:
+    def _try_skipped_message_key(self, dh_public: bytes, message_number: int) -> bytes | None:
         key = (dh_public, message_number)
         if key in self.skipped_keys:
             mk = self.skipped_keys.pop(key)
@@ -232,7 +230,7 @@ class DoubleRatchet:
 
     # ── Transactional state copy ──────────────────────────────────────
 
-    def _clone_for_decrypt(self) -> "DoubleRatchet":
+    def _clone_for_decrypt(self) -> DoubleRatchet:
         """Create an isolated copy of ratchet state for transactional decryption.
 
         ChainKey objects are immutable once created: ``next_message_key()``
@@ -440,8 +438,8 @@ class DoubleRatchet:
 
 
 __all__ = [
+    "HEADER_SIZE",
     "ChainKey",
     "DoubleRatchet",
-    "HEADER_SIZE",
     "ProtocolError",
 ]

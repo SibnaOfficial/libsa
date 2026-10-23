@@ -34,10 +34,15 @@ from __future__ import annotations
 import os
 import struct
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from . import constants as C
-from .crypto import chacha20_poly1305_decrypt, chacha20_poly1305_encrypt, hmac_sha256, sha256
+from .crypto import (
+    chacha20_poly1305_decrypt,
+    chacha20_poly1305_encrypt,
+    hmac_sha256,
+    sha256,
+)
 from .errors import StorageError, ValidationError
 
 STORAGE_MAGIC = C.STORAGE_MAGIC  # b"SIBNA001"
@@ -78,10 +83,10 @@ class SecureStorage:
     def save(
         self,
         path: str,
-        payload: Dict[str, Any],
-        salt: Optional[bytes] = None,
-        sequence_number: Optional[int] = None,
-        device_id: Optional[bytes] = None,
+        payload: dict[str, Any],
+        salt: bytes | None = None,
+        sequence_number: int | None = None,
+        device_id: bytes | None = None,
     ) -> bytes:
         """Serialize, encrypt, and atomically write the payload.
 
@@ -140,7 +145,7 @@ class SecureStorage:
 
     # ── Load ─────────────────────────────────────────────────────────
 
-    def load(self, path: str) -> Tuple[Dict[str, Any], bytes]:
+    def load(self, path: str) -> tuple[dict[str, Any], bytes]:
         """Load, verify, and decrypt the payload.
 
         Returns ``(payload_dict, salt)``. Raises StorageError on any
@@ -210,7 +215,7 @@ def _constant_time_bytes_eq(a: bytes, b: bytes) -> bool:
 
 
 __all__ = [
-    "SecureStorage",
     "STORAGE_FORMAT_VERSION",
+    "SecureStorage",
     "_derive_storage_key",
 ]

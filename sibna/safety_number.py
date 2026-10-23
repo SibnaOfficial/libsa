@@ -39,7 +39,7 @@ class SafetyNumber:
         return their_identity, our_identity
 
     @classmethod
-    def calculate(cls, our_identity: bytes, their_identity: bytes) -> "SafetyNumber":
+    def calculate(cls, our_identity: bytes, their_identity: bytes) -> SafetyNumber:
         if len(our_identity) != 32 or len(their_identity) != 32:
             raise ValidationError("Identity keys must be 32 bytes")
         first, second = cls._sort(our_identity, their_identity)
@@ -51,7 +51,7 @@ class SafetyNumber:
     @classmethod
     def calculate_with_extra(
         cls, our_identity: bytes, their_identity: bytes, extra_data: bytes
-    ) -> "SafetyNumber":
+    ) -> SafetyNumber:
         first, second = cls._sort(our_identity, their_identity)
         hasher = sha512(
             bytes([cls.VERSION]) + SAFETY_NUMBER_DOMAIN_EXTRA + first + second + extra_data
@@ -61,7 +61,7 @@ class SafetyNumber:
         return cls(digits=digits, fingerprint=fingerprint)
 
     @classmethod
-    def from_string(cls, s: str) -> "SafetyNumber":
+    def from_string(cls, s: str) -> SafetyNumber:
         digits = "".join(c for c in s if c.isdigit())
         if len(digits) != SAFETY_NUMBER_DIGIT_COUNT:
             raise ValidationError(f"Expected 80 digits, got {len(digits)}")
@@ -90,7 +90,7 @@ class SafetyNumber:
         """QR code data: version(1) + "SB1"(3) + fingerprint(32) = 36 bytes."""
         return bytes([self.version]) + b"SB1" + self.fingerprint
 
-    def verify(self, other: "SafetyNumber") -> bool:
+    def verify(self, other: SafetyNumber) -> bool:
         """Constant-time-ish fingerprint comparison."""
         from .crypto import hmac_sha256
 
@@ -137,7 +137,7 @@ class SafetyNumber:
 
 
 __all__ = [
-    "SafetyNumber",
-    "SAFETY_NUMBER_VERSION",
     "SAFETY_NUMBER_DIGIT_COUNT",
+    "SAFETY_NUMBER_VERSION",
+    "SafetyNumber",
 ]

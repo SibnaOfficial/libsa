@@ -22,6 +22,12 @@ __author__ = "Sibna Security Team"
 __license__ = "Apache-2.0 OR MIT"
 
 # ── Constants ────────────────────────────────────────────────────────────────
+# ── Relay client ─────────────────────────────────────────────────────────────
+from .client import (
+    AsyncSibnaClient,
+    Identity,
+    SibnaClient,
+)
 from .constants import (  # noqa: F401
     ED25519_PUBLIC_KEY_LENGTH,
     GROUP_CHAIN_KEY_INFO,
@@ -36,14 +42,14 @@ from .constants import (  # noqa: F401
     MAX_MESSAGE_AGE_SECS,
     MAX_MESSAGE_NUMBER,
     MAX_MESSAGE_SIZE,
-    MAX_PASSWORD_LEN,
     MAX_PADDING_BYTES,
+    MAX_PASSWORD_LEN,
     MAX_SESSION_ID_LEN,
     MAX_SKIPPED_MESSAGES,
+    MIN_COMPATIBLE_VERSION,
     ML_KEM_768_CIPHERTEXT_LENGTH,
     ML_KEM_768_PUBLIC_KEY_LENGTH,
     ML_KEM_768_SECRET_KEY_LENGTH,
-    MIN_COMPATIBLE_VERSION,
     NONCE_LENGTH,
     PADDING_BLOCK_STANDARD,
     PROTOCOL_VERSION_STRING,
@@ -53,8 +59,38 @@ from .constants import (  # noqa: F401
     X25519_PUBLIC_KEY_LENGTH,
 )
 
+# ── Cryptographic primitives ─────────────────────────────────────────────────
+from .crypto import (  # noqa: F401
+    C,
+    Ed25519KeyPair,
+    X25519KeyPair,
+    blake3_hash,
+    chacha20_poly1305_decrypt,
+    chacha20_poly1305_encrypt,
+    derive_identity_keys,
+    hkdf,
+    hkdf_expand,
+    hkdf_extract,
+    hmac_sha256,
+    ml_kem_768_decapsulate,
+    ml_kem_768_encapsulate,
+    ml_kem_768_keypair,
+    random_bytes,
+    sha256,
+    sha512,
+)
+
+# ── Envelope ─────────────────────────────────────────────────────────────────
+from .envelope import (  # noqa: F401
+    ENVELOPE_MAX_AGE_SECS as _ENVELOPE_MAX_AGE_SECS,
+)
+from .envelope import (
+    make_signed_envelope,
+    verify_signed_envelope,
+)
+
 # ── Errors ───────────────────────────────────────────────────────────────────
-from .errors import (  # noqa: F401
+from .errors import (
     AuthError,
     CryptoError,
     KeyNotFoundError,
@@ -65,30 +101,23 @@ from .errors import (  # noqa: F401
     StorageError,
     ValidationError,
 )
+from .group import (
+    MAX_GROUP_MESSAGE_SIZE as _MAX_GROUP_MESSAGE_SIZE,  # noqa: F401
+)
+from .group import (
+    MAX_GROUP_SIZE as _MAX_GROUP_SIZE,  # noqa: F401
+)
 
-# ── Cryptographic primitives ─────────────────────────────────────────────────
-from .crypto import (  # noqa: F401
-    C,
-    X25519KeyPair,
-    Ed25519KeyPair,
-    blake3_hash,
-    chacha20_poly1305_decrypt,
-    chacha20_poly1305_encrypt,
-    derive_identity_keys,
-    hmac_sha256,
-    hkdf,
-    hkdf_expand,
-    hkdf_extract,
-    ml_kem_768_decapsulate,
-    ml_kem_768_encapsulate,
-    ml_kem_768_keypair,
-    random_bytes,
-    sha256,
-    sha512,
+# ── Group messaging ──────────────────────────────────────────────────────────
+from .group import (
+    GroupMessage,
+    GroupSession,
+    SenderKey,
+    SenderKeyMessage,
 )
 
 # ── Padding ──────────────────────────────────────────────────────────────────
-from .padding import (  # noqa: F401
+from .padding import (
     PaddingMode,
     pad_message,
     pad_payload,
@@ -96,8 +125,40 @@ from .padding import (  # noqa: F401
     unpad_payload,
 )
 
+# ── Double Ratchet ──────────────────────────────────────────────────────────
+from .ratchet import (
+    HEADER_SIZE,
+    ChainKey,
+    DoubleRatchet,
+)
+from .safety_number import (
+    SAFETY_NUMBER_DIGIT_COUNT as _SAFETY_NUMBER_DIGIT_COUNT,  # noqa: F401
+)
+from .safety_number import (
+    SAFETY_NUMBER_VERSION as _SAFETY_NUMBER_VERSION,  # noqa: F401
+)
+
+# ── Safety numbers ───────────────────────────────────────────────────────────
+from .safety_number import (
+    SafetyNumber,
+)
+
+# ── Session ──────────────────────────────────────────────────────────────────
+from .session import (
+    Session,
+    SessionConfig,
+)
+from .storage import (
+    STORAGE_FORMAT_VERSION as _STORAGE_FORMAT_VERSION,  # noqa: F401
+)
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+from .storage import (
+    SecureStorage,
+)
+
 # ── X3DH ─────────────────────────────────────────────────────────────────────
-from .x3dh import (  # noqa: F401
+from .x3dh import (
     PreKeyBundle,
     X3DHResult,
     generate_peer_bundle,
@@ -105,64 +166,11 @@ from .x3dh import (  # noqa: F401
     x3dh_responder,
 )
 
-# ── Double Ratchet ──────────────────────────────────────────────────────────
-from .ratchet import (  # noqa: F401
-    ChainKey,
-    DoubleRatchet,
-    HEADER_SIZE,
-)
-
-# ── Session ──────────────────────────────────────────────────────────────────
-from .session import (  # noqa: F401
-    Session,
-    SessionConfig,
-)
-
-# ── Group messaging ──────────────────────────────────────────────────────────
-from .group import (  # noqa: F401
-    GroupMessage,
-    GroupSession,
-    SenderKey,
-    SenderKeyMessage,
-    MAX_GROUP_MESSAGE_SIZE as _MAX_GROUP_MESSAGE_SIZE,  # noqa: F401
-    MAX_GROUP_SIZE as _MAX_GROUP_SIZE,  # noqa: F401
-)
-
-# ── Safety numbers ───────────────────────────────────────────────────────────
-from .safety_number import (  # noqa: F401
-    SafetyNumber,
-    SAFETY_NUMBER_DIGIT_COUNT as _SAFETY_NUMBER_DIGIT_COUNT,  # noqa: F401
-    SAFETY_NUMBER_VERSION as _SAFETY_NUMBER_VERSION,  # noqa: F401
-)
-
-# ── Envelope ─────────────────────────────────────────────────────────────────
-from .envelope import (  # noqa: F401
-    ENVELOPE_MAX_AGE_SECS as _ENVELOPE_MAX_AGE_SECS,  # noqa: F401
-    make_signed_envelope,
-    verify_signed_envelope,
-)
-
-# ── Storage ──────────────────────────────────────────────────────────────────
-from .storage import (  # noqa: F401
-    SecureStorage,
-    STORAGE_FORMAT_VERSION as _STORAGE_FORMAT_VERSION,  # noqa: F401
-)
-
-# ── Relay client ─────────────────────────────────────────────────────────────
-from .client import (  # noqa: F401
-    AsyncSibnaClient,
-    Identity,
-    SibnaClient,
-)
-
 __all__ = [
-    # Version
-    "__version__",
+    "ED25519_PUBLIC_KEY_LENGTH",
+    "HEADER_SIZE",
     # Constants
     "KEY_LENGTH",
-    "ED25519_PUBLIC_KEY_LENGTH",
-    "NONCE_LENGTH",
-    "TAG_LENGTH",
     "MAX_AD_LEN",
     "MAX_CHAIN_MESSAGES",
     "MAX_EXTRA_BLOCKS",
@@ -171,79 +179,82 @@ __all__ = [
     "MAX_MESSAGE_AGE_SECS",
     "MAX_MESSAGE_NUMBER",
     "MAX_MESSAGE_SIZE",
-    "MAX_PASSWORD_LEN",
     "MAX_PADDING_BYTES",
+    "MAX_PASSWORD_LEN",
     "MAX_SESSION_ID_LEN",
     "MAX_SKIPPED_MESSAGES",
+    "MIN_COMPATIBLE_VERSION",
     "ML_KEM_768_CIPHERTEXT_LENGTH",
     "ML_KEM_768_PUBLIC_KEY_LENGTH",
     "ML_KEM_768_SECRET_KEY_LENGTH",
-    "MIN_COMPATIBLE_VERSION",
+    "NONCE_LENGTH",
     "PADDING_BLOCK_STANDARD",
     "PROTOCOL_VERSION_STRING",
     "PROTOCOL_VERSION_WIRE",
     "SAFETY_NUMBER_DIGIT_COUNT",
+    "TAG_LENGTH",
     "X25519_PUBLIC_KEY_LENGTH",
-    # Errors
-    "SibnaError",
+    "AsyncSibnaClient",
     "AuthError",
-    "CryptoError",
-    "ValidationError",
-    "ProtocolError",
-    "NetworkError",
-    "StorageError",
-    "KeyNotFoundError",
-    "SessionNotFoundError",
-    # Crypto
-    "X25519KeyPair",
-    "Ed25519KeyPair",
-    "blake3_hash",
-    "sha256",
-    "sha512",
-    "hkdf",
-    "hkdf_extract",
-    "hkdf_expand",
-    "hmac_sha256",
-    "random_bytes",
-    "derive_identity_keys",
-    "chacha20_poly1305_encrypt",
-    "chacha20_poly1305_decrypt",
-    "ml_kem_768_keypair",
-    "ml_kem_768_encapsulate",
-    "ml_kem_768_decapsulate",
-    # Padding
-    "PaddingMode",
-    "pad_message",
-    "pad_payload",
-    "unpad_message",
-    "unpad_payload",
-    # X3DH
-    "PreKeyBundle",
-    "X3DHResult",
-    "generate_peer_bundle",
-    "x3dh_initiator",
-    "x3dh_responder",
     # Double Ratchet
     "ChainKey",
+    "CryptoError",
     "DoubleRatchet",
-    "HEADER_SIZE",
-    # Session
-    "Session",
-    "SessionConfig",
+    "Ed25519KeyPair",
+    "GroupMessage",
+    "GroupSession",
+    # Relay client
+    "Identity",
+    "KeyNotFoundError",
+    "NetworkError",
+    # Padding
+    "PaddingMode",
+    # X3DH
+    "PreKeyBundle",
+    "ProtocolError",
+    # Safety Numbers
+    "SafetyNumber",
+    # Storage
+    "SecureStorage",
     # Group
     "SenderKey",
     "SenderKeyMessage",
-    "GroupMessage",
-    "GroupSession",
-    # Safety Numbers
-    "SafetyNumber",
+    # Session
+    "Session",
+    "SessionConfig",
+    "SessionNotFoundError",
+    "SibnaClient",
+    # Errors
+    "SibnaError",
+    "StorageError",
+    "ValidationError",
+    "X3DHResult",
+    # Crypto
+    "X25519KeyPair",
+    # Version
+    "__version__",
+    "blake3_hash",
+    "chacha20_poly1305_decrypt",
+    "chacha20_poly1305_encrypt",
+    "derive_identity_keys",
+    "generate_peer_bundle",
+    "hkdf",
+    "hkdf_expand",
+    "hkdf_extract",
+    "hmac_sha256",
     # Envelope
     "make_signed_envelope",
+    "ml_kem_768_decapsulate",
+    "ml_kem_768_encapsulate",
+    "ml_kem_768_keypair",
+    "pad_message",
+    "pad_payload",
+    "random_bytes",
+    "sha256",
+    "sha512",
+    "unpad_message",
+    "unpad_payload",
     "verify_signed_envelope",
-    # Storage
-    "SecureStorage",
-    # Relay client
-    "Identity",
-    "SibnaClient",
-    "AsyncSibnaClient",
+    "x3dh_initiator",
+    "x3dh_responder",
 ]

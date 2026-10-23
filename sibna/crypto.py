@@ -27,8 +27,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-import struct
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -113,7 +112,7 @@ def hkdf_expand(prk: bytes, info: bytes, length: int = C.KEY_LENGTH) -> bytes:
 
 def hkdf(
     ikm: bytes,
-    salt: Optional[bytes] = None,
+    salt: bytes | None = None,
     info: bytes = b"",
     length: int = C.KEY_LENGTH,
 ) -> bytes:
@@ -149,7 +148,7 @@ class Ed25519KeyPair:
     Private key material is never included in ``__repr__``.
     """
 
-    def __init__(self, private_key: Optional[Ed25519PrivateKey] = None):
+    def __init__(self, private_key: Ed25519PrivateKey | None = None):
         if private_key is None:
             self._private = Ed25519PrivateKey.generate()
         else:
@@ -157,7 +156,7 @@ class Ed25519KeyPair:
         self._public = self._private.public_key()
 
     @classmethod
-    def from_seed(cls, seed: bytes) -> "Ed25519KeyPair":
+    def from_seed(cls, seed: bytes) -> Ed25519KeyPair:
         """Create from a 32-byte Ed25519 seed."""
         if len(seed) != C.KEY_LENGTH:
             raise ValidationError(f"Ed25519 seed must be {C.KEY_LENGTH} bytes, got {len(seed)}")
@@ -187,8 +186,9 @@ class Ed25519KeyPair:
             return True
         except InvalidSignature:
             return False
-        except Exception:
-            return False
+        except Exception:  # noqa: BLE001
+            return False  # Catch-all for unexpected verification errors
+            return False  # Catch-all for unexpected verification errors
 
     @classmethod
     def verify_with_key(cls, public_key: bytes, data: bytes, signature: bytes) -> bool:
@@ -199,8 +199,9 @@ class Ed25519KeyPair:
             return True
         except (InvalidSignature, ValueError):
             return False
-        except Exception:
-            return False
+        except Exception:  # noqa: BLE001
+            return False  # Catch-all for unexpected verification errors
+            return False  # Catch-all for unexpected verification errors
 
     def __repr__(self) -> str:  # pragma: no cover - debugging only
         return f"<Ed25519KeyPair public_key={self.public_key.hex()[:16]}...>"
@@ -232,7 +233,7 @@ class X25519KeyPair:
     attacks, matching `core/src/crypto/mod.rs::validate_public_key`.
     """
 
-    def __init__(self, private_key: Optional[X25519PrivateKey] = None):
+    def __init__(self, private_key: X25519PrivateKey | None = None):
         if private_key is None:
             self._private = X25519PrivateKey.generate()
         else:
@@ -240,14 +241,14 @@ class X25519KeyPair:
         self._public = self._private.public_key()
 
     @classmethod
-    def from_seed(cls, seed: bytes) -> "X25519KeyPair":
+    def from_seed(cls, seed: bytes) -> X25519KeyPair:
         """Create from a 32-byte X25519 seed (clamped scalar)."""
         if len(seed) != C.KEY_LENGTH:
             raise ValidationError(f"X25519 seed must be {C.KEY_LENGTH} bytes, got {len(seed)}")
         return cls(X25519PrivateKey.from_private_bytes(seed))
 
     @classmethod
-    def from_private_bytes(cls, private_bytes: bytes) -> "X25519KeyPair":
+    def from_private_bytes(cls, private_bytes: bytes) -> X25519KeyPair:
         return cls(X25519PrivateKey.from_private_bytes(private_bytes))
 
     @property
@@ -276,7 +277,7 @@ class X25519KeyPair:
         return self._private.exchange(remote)
 
     @classmethod
-    def generate(cls) -> "X25519KeyPair":
+    def generate(cls) -> X25519KeyPair:
         return cls(X25519PrivateKey.generate())
 
     def __repr__(self) -> str:  # pragma: no cover - debugging only
@@ -312,7 +313,7 @@ def chacha20_poly1305_encrypt(
     key: bytes,
     plaintext: bytes,
     associated_data: bytes = b"",
-    nonce: Optional[bytes] = None,
+    nonce: bytes | None = None,
 ) -> bytes:
     """Encrypt with ChaCha20-Poly1305.
 
@@ -408,22 +409,22 @@ def ml_kem_768_decapsulate(secret_key: bytes, ciphertext: bytes) -> bytes:
 
 
 __all__ = [
-    "blake3_hash",
-    "sha256",
-    "sha512",
-    "hkdf",
-    "hkdf_extract",
-    "hkdf_expand",
-    "hmac_sha256",
-    "random_bytes",
+    "LOW_ORDER_POINTS",
+    "C",
     "Ed25519KeyPair",
     "X25519KeyPair",
-    "LOW_ORDER_POINTS",
-    "derive_identity_keys",
-    "chacha20_poly1305_encrypt",
+    "blake3_hash",
     "chacha20_poly1305_decrypt",
-    "ml_kem_768_keypair",
-    "ml_kem_768_encapsulate",
+    "chacha20_poly1305_encrypt",
+    "derive_identity_keys",
+    "hkdf",
+    "hkdf_expand",
+    "hkdf_extract",
+    "hmac_sha256",
     "ml_kem_768_decapsulate",
-    "C",
+    "ml_kem_768_encapsulate",
+    "ml_kem_768_keypair",
+    "random_bytes",
+    "sha256",
+    "sha512",
 ]

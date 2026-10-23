@@ -28,12 +28,12 @@ import os
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from . import constants as C
 from .crypto import (
-    X25519KeyPair,
     Ed25519KeyPair,
+    X25519KeyPair,
     chacha20_poly1305_decrypt,
     chacha20_poly1305_encrypt,
     hkdf,
@@ -58,8 +58,8 @@ class SenderKey:
         chain_key: bytes,
         message_number: int = 0,
         key_id: int = 0,
-        created_at: Optional[float] = None,
-        expiration: Optional[float] = None,
+        created_at: float | None = None,
+        expiration: float | None = None,
     ):
         if len(chain_key) != C.KEY_LENGTH:
             raise ValidationError("chain_key must be 32 bytes")
@@ -70,7 +70,7 @@ class SenderKey:
         self.expiration = expiration
 
     @classmethod
-    def generate(cls, key_id: int = 0) -> "SenderKey":
+    def generate(cls, key_id: int = 0) -> SenderKey:
         return cls(
             chain_key=os.urandom(C.KEY_LENGTH),
             key_id=key_id,
@@ -105,7 +105,7 @@ class SenderKey:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "SenderKey":
+    def from_dict(cls, d: dict[str, Any]) -> SenderKey:
         return cls(
             chain_key=bytes.fromhex(d["chain_key"]),
             message_number=d["message_number"],
@@ -158,7 +158,7 @@ class SenderKeyMessage:
         )
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "SenderKeyMessage":
+    def from_bytes(cls, data: bytes) -> SenderKeyMessage:
         offset = 0
         group_id = data[offset : offset + 32]
         offset += 32
@@ -231,7 +231,7 @@ class GroupMessage:
         return bytes(out)
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "GroupMessage":
+    def from_bytes(cls, data: bytes) -> GroupMessage:
         offset = 0
         group_id = data[offset : offset + 32]
         offset += 32
@@ -268,15 +268,15 @@ class GroupSession:
         if len(group_id) != 32:
             raise ValidationError("group_id must be 32 bytes")
         self.group_id = group_id
-        self._sender_key: Optional[SenderKey] = None
-        self._sender_keys: Dict[bytes, SenderKey] = {}  # public_key -> SenderKey
-        self.members: List[bytes] = []
+        self._sender_key: SenderKey | None = None
+        self._sender_keys: dict[bytes, SenderKey] = {}  # public_key -> SenderKey
+        self.members: list[bytes] = []
         self.epoch = 0
         self.created_at = time.time()
         self.last_activity = time.time()
 
     @classmethod
-    def create(cls, group_id: Optional[bytes] = None) -> "GroupSession":
+    def create(cls, group_id: bytes | None = None) -> GroupSession:
         if group_id is None:
             group_id = os.urandom(32)
         session = cls(group_id)
@@ -309,7 +309,7 @@ class GroupSession:
     # ── Sender operations ───────────────────────────────────────────
 
     def encrypt(
-        self, plaintext: bytes, signing_identity: Optional[Ed25519KeyPair] = None
+        self, plaintext: bytes, signing_identity: Ed25519KeyPair | None = None
     ) -> GroupMessage:
         if len(plaintext) > MAX_GROUP_MESSAGE_SIZE:
             raise CryptoError("Group message too large")
@@ -319,7 +319,7 @@ class GroupSession:
         message_key = self._sender_key.next_message_key()
         nonce = os.urandom(C.NONCE_LENGTH)
         ct_and_tag = chacha20_poly1305_encrypt(message_key, plaintext, self.group_id, nonce)
-        self._sender_key.message_number  # already advanced
+        # Advance chain key (consumed by encrypt above)
         msg_number = self._sender_key.message_number - 1
 
         message = GroupMessage(
@@ -339,8 +339,8 @@ class GroupSession:
         return message
 
     def get_key_distribution_message(
-        self, identity: Ed25519KeyPair, member_public_keys: List[bytes]
-    ) -> List[SenderKeyMessage]:
+        self, identity: Ed25519KeyPair, member_public_keys: list[bytes]
+    ) -> list[SenderKeyMessage]:
         if self._sender_key is None:
             raise CryptoError("No sender key")
         messages = []
@@ -412,10 +412,10 @@ class GroupSession:
 
 
 __all__ = [
-    "SenderKey",
-    "SenderKeyMessage",
+    "MAX_GROUP_MESSAGE_SIZE",
+    "MAX_GROUP_SIZE",
     "GroupMessage",
     "GroupSession",
-    "MAX_GROUP_SIZE",
-    "MAX_GROUP_MESSAGE_SIZE",
+    "SenderKey",
+    "SenderKeyMessage",
 ]

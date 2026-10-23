@@ -23,28 +23,25 @@ silently disabled.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import struct
+import ssl
 import time
 import uuid
-from typing import Any, Callable, cast, Dict, List, Optional
+from typing import Any, Callable, cast
 
 import aiohttp
 import requests
-import ssl
 
-from . import constants as C
 from .crypto import Ed25519KeyPair
 from .envelope import make_signed_envelope, verify_signed_envelope
-from .errors import AuthError, CryptoError, NetworkError, SibnaError
+from .errors import AuthError, NetworkError
 
 
 class Identity:
     """Ed25519 identity keypair used for authentication and message signing."""
 
-    def __init__(self, private_key_bytes: Optional[bytes] = None):
+    def __init__(self, private_key_bytes: bytes | None = None):
         if private_key_bytes is None:
             self._private = Ed25519KeyPair()
         else:
@@ -84,7 +81,7 @@ class Identity:
             pass  # Filesystem may not support chmod (e.g. some Windows setups)
 
     @classmethod
-    def load(cls, path: str) -> "Identity":
+    def load(cls, path: str) -> Identity:
         with open(path, "rb") as f:
             return cls(private_key_bytes=f.read())
 
@@ -101,12 +98,12 @@ class SibnaClient:
     def __init__(
         self,
         server: str = "http://localhost:8080",
-        pinned_cert: Optional[str] = None,
+        pinned_cert: str | None = None,
         timeout: float = 30.0,
     ):
         self.server = server.rstrip("/")
-        self.identity: Optional[Identity] = None
-        self.jwt_token: Optional[str] = None
+        self.identity: Identity | None = None
+        self.jwt_token: str | None = None
         self.timeout = timeout
         self._session = requests.Session()
 
@@ -125,7 +122,7 @@ class SibnaClient:
 
     # ── Identity ────────────────────────────────────────────────────
 
-    def generate_identity(self, private_key_bytes: Optional[bytes] = None) -> Identity:
+    def generate_identity(self, private_key_bytes: bytes | None = None) -> Identity:
         self.identity = Identity(private_key_bytes)
         return self.identity
 
@@ -160,15 +157,15 @@ class SibnaClient:
         self.jwt_token = r.json()["token"]
         return self.jwt_token
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         r = self._session.get(f"{self.server}/health", timeout=self.timeout)
         self._check_response(r, "health")
-        return cast(Dict[str, Any], r.json())
+        return cast(dict[str, Any], r.json())
 
     # ── PreKeys ─────────────────────────────────────────────────────
 
     def upload_prekey(self, bundle_hex: str, is_last_resort: bool = False) -> None:
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         if self.jwt_token:
             headers["Authorization"] = f"Bearer {self.jwt_token}"
         r = self._session.post(
@@ -179,15 +176,15 @@ class SibnaClient:
         )
         self._check_response(r, "prekeys/upload")
 
-    def fetch_prekeys(self, root_id_hex: str) -> List[str]:
-        headers: Dict[str, str] = {}
+    def fetch_prekeys(self, root_id_hex: str) -> list[str]:
+        headers: dict[str, str] = {}
         if self.jwt_token:
             headers["Authorization"] = f"Bearer {self.jwt_token}"
         r = self._session.get(
             f"{self.server}/v1/prekeys/{root_id_hex}", headers=headers, timeout=self.timeout
         )
         self._check_response(r, "prekeys/fetch")
-        return cast(List[str], r.json()["bundles_hex"])
+        return cast(list[str], r.json()["bundles_hex"])
 
     # ── Messages ────────────────────────────────────────────────────
 
@@ -210,7 +207,7 @@ class SibnaClient:
                 "compressed": compress,
             }
 
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         if self.jwt_token:
             headers["Authorization"] = f"Bearer {self.jwt_token}"
 
@@ -223,10 +220,10 @@ class SibnaClient:
         self._check_response(r, "messages/send")
         return r.status_code
 
-    def fetch_inbox(self) -> List[Dict[str, Any]]:
+    def fetch_inbox(self) -> list[dict[str, Any]]:
         if not self.identity or not self.jwt_token:
             raise AuthError("Must authenticate before fetching inbox.")
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         if self.jwt_token:
             headers["Authorization"] = f"Bearer {self.jwt_token}"
         r = self._session.get(
@@ -270,7 +267,7 @@ class AsyncSibnaClient:
     def __init__(
         self,
         server: str = "http://localhost:8080",
-        pinned_cert: Optional[str] = None,
+        pinned_cert: str | None = None,
     ):
         try:
             import aiohttp  # noqa: F401
@@ -281,10 +278,10 @@ class AsyncSibnaClient:
 
         self.server = server.rstrip("/")
         self.ws_server = server.replace("http://", "ws://").replace("https://", "wss://")
-        self.identity: Optional[Identity] = None
-        self.jwt_token: Optional[str] = None
-        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        self._on_message: Optional[Callable[..., Any]] = None
+        self.identity: Identity | None = None
+        self.jwt_token: str | None = None
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._on_message: Callable[..., Any] | None = None
         self._pinned_cert = pinned_cert
 
         if pinned_cert is not None and not os.path.isfile(pinned_cert):
@@ -296,7 +293,7 @@ class AsyncSibnaClient:
             ctx.load_verify_locations(cafile=self._pinned_cert)
         return ctx
 
-    def generate_identity(self, private_key_bytes: Optional[bytes] = None) -> Identity:
+    def generate_identity(self, private_key_bytes: bytes | None = None) -> Identity:
         self.identity = Identity(private_key_bytes)
         return self.identity
 
@@ -331,7 +328,7 @@ class AsyncSibnaClient:
                 self.jwt_token = data["token"]
                 return self.jwt_token
 
-    async def connect(self, on_message: Optional[Callable[..., Any]] = None) -> None:
+    async def connect(self, on_message: Callable[..., Any] | None = None) -> None:
         """Connect to the WebSocket relay.
 
         The JWT is sent via the ``?token=`` query parameter, matching the
@@ -347,8 +344,8 @@ class AsyncSibnaClient:
         connector = aiohttp.TCPConnector(ssl=ssl_ctx) if ssl_ctx else None
 
         ws_url = f"{self.ws_server}/ws?token={self.jwt_token}"
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.ws_connect(ws_url) as ws:
+        async with aiohttp.ClientSession(connector=connector) as session, \
+                    session.ws_connect(ws_url) as ws:
                 self._ws = ws
                 async for msg in ws:
                     if msg.type == aiohttp.WSMsgType.BINARY:
@@ -377,8 +374,8 @@ class AsyncSibnaClient:
                             elif msg_type == "webrtc":
                                 if self._on_message:
                                     await self._on_message(ws_msg)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            raise NetworkError(f"WebSocket receive error: {exc}") from exc
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         raise NetworkError(f"WebSocket error: {ws.exception()}")
 
@@ -413,9 +410,9 @@ class AsyncSibnaClient:
 
 
 __all__ = [
+    "AsyncSibnaClient",
     "Identity",
     "SibnaClient",
-    "AsyncSibnaClient",
     "make_signed_envelope",
     "verify_signed_envelope",
 ]

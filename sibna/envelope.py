@@ -44,10 +44,7 @@ from __future__ import annotations
 
 import struct
 import uuid
-from typing import Any, Dict, Protocol
-
-from .crypto import Ed25519KeyPair
-from .errors import CryptoError
+from typing import Any, Protocol
 
 
 class Signer(Protocol):
@@ -105,7 +102,7 @@ def make_signed_envelope(
     message_id: str | None = None,
     timestamp: int | None = None,
     compressed: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a signed, sealed envelope.
 
     The signature covers the canonical payload directly (not SHA-512 of canonical).
@@ -135,7 +132,7 @@ def make_signed_envelope(
     }
 
 
-def verify_signed_envelope(envelope: Dict[str, Any]) -> bool:
+def verify_signed_envelope(envelope: dict[str, Any]) -> bool:
     """Verify a received envelope's Ed25519 signature.
 
     Returns True if the signature is valid, False otherwise. Always call
@@ -149,10 +146,10 @@ def verify_signed_envelope(envelope: Dict[str, Any]) -> bool:
     message-ID deduplication plus client ratchet sequence-number tracking.
     """
     try:
+        from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives.asymmetric.ed25519 import (
             Ed25519PublicKey,
         )
-        from cryptography.exceptions import InvalidSignature
 
         recipient_id = envelope["recipient_id"]
         message_id = envelope["message_id"]
@@ -169,12 +166,12 @@ def verify_signed_envelope(envelope: Dict[str, Any]) -> bool:
         return True
     except (InvalidSignature, ValueError, KeyError, TypeError):
         return False
-    except Exception:
-        return False
+    except Exception:  # noqa: BLE001
+        return False  # Catch-all for malformed envelope data - verification must not raise
 
 
 __all__ = [
+    "ENVELOPE_MAX_AGE_SECS",
     "make_signed_envelope",
     "verify_signed_envelope",
-    "ENVELOPE_MAX_AGE_SECS",
 ]

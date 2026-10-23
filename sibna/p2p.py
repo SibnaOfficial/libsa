@@ -66,18 +66,17 @@ import asyncio
 import os
 import struct
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from . import constants as C
 from .crypto import (
-    X25519KeyPair,
     Ed25519KeyPair,
+    X25519KeyPair,
     blake3_hash,
     chacha20_poly1305_decrypt,
     chacha20_poly1305_encrypt,
     hkdf,
 )
-from .errors import CryptoError, ValidationError
 
 # ── Wire format ─────────────────────────────────────────────────────────────
 
@@ -128,7 +127,7 @@ class Hello:
         return bytes(out)
 
     @classmethod
-    def decode(cls, data: bytes) -> "Hello":
+    def decode(cls, data: bytes) -> Hello:
         if len(data) < 1 + 32 + 16:
             raise ProtocolError("Hello payload too short")
         version = data[0]
@@ -154,7 +153,7 @@ class Bundle:
         return bytes(out)
 
     @classmethod
-    def decode(cls, data: bytes) -> "Bundle":
+    def decode(cls, data: bytes) -> Bundle:
         if len(data) < 32 + 4:
             raise ProtocolError("Bundle payload too short")
         ephemeral_pub = data[:32]
@@ -176,7 +175,7 @@ class Envelope:
         return bytes(out)
 
     @classmethod
-    def decode(cls, data: bytes) -> "Envelope":
+    def decode(cls, data: bytes) -> Envelope:
         if len(data) < 4:
             raise ProtocolError("Envelope payload too short")
         length = struct.unpack("<I", data[:4])[0]
@@ -197,7 +196,7 @@ class Ok:
         return bytes(out)
 
     @classmethod
-    def decode(cls, data: bytes) -> "Ok":
+    def decode(cls, data: bytes) -> Ok:
         if len(data) < 4:
             raise ProtocolError("Ok payload too short")
         length = struct.unpack("<I", data[:4])[0]
@@ -221,7 +220,7 @@ class P2pConfig:
     bind_addr: str = "0.0.0.0:0"
     handshake_timeout_secs: int = 30
     max_message_size: int = 10 * 1024 * 1024
-    expected_peer_identity: Optional[bytes] = None  # 32-byte Ed25519 key
+    expected_peer_identity: bytes | None = None  # 32-byte Ed25519 key
 
 
 # ── Handshake crypto ────────────────────────────────────────────────────────
@@ -242,7 +241,7 @@ def build_transcript(
     initiator_ephemeral: bytes,
     responder_identity: bytes,
     responder_signed_prekey: bytes,
-    responder_onetime_prekey: Optional[bytes],
+    responder_onetime_prekey: bytes | None,
     initiator_device_id: bytes,
     responder_device_id: bytes,
 ) -> bytes:
@@ -319,7 +318,7 @@ def encode_stealth_bundle(
     responder_device_id: bytes,
     responder_signed_prekey: bytes,
     responder_signed_prekey_signature: bytes,
-    responder_onetime_prekey: Optional[bytes],
+    responder_onetime_prekey: bytes | None,
 ) -> bytes:
     out = bytearray()
     out.extend(responder_ed25519_pub)
@@ -367,8 +366,8 @@ def encode_stealth_envelope(
     initiator_x25519_identity_pub: bytes,
     initiator_device_id: bytes,
     signed_prekey_used: bytes,
-    onetime_prekey_used: Optional[bytes],
-    pq_ciphertext: Optional[bytes],
+    onetime_prekey_used: bytes | None,
+    pq_ciphertext: bytes | None,
 ) -> bytes:
     out = bytearray()
     out.extend(initiator_ed25519_pub)
@@ -422,8 +421,8 @@ def decode_stealth_envelope(data: bytes) -> dict[str, Any]:
 
 # ── Handshake roles ─────────────────────────────────────────────────────────
 
-from .session import Session  # noqa: E402  (imported at bottom to avoid circular import)
-from .x3dh import PreKeyBundle, x3dh_initiator, x3dh_responder  # noqa: E402
+from .session import Session
+from .x3dh import PreKeyBundle, x3dh_initiator, x3dh_responder
 
 
 async def initiator_handshake(
@@ -435,7 +434,7 @@ async def initiator_handshake(
     our_device_id: bytes = bytes(16),
     peer_device_id: bytes = bytes(16),
     timeout_secs: int = 30,
-    expected_peer_identity: Optional[bytes] = None,
+    expected_peer_identity: bytes | None = None,
     use_pq: bool = False,
 ) -> tuple[Session, bytes]:
     """Run the initiator (Alice) side of the P2P handshake.
@@ -480,12 +479,11 @@ async def initiator_handshake(
     stealth_bundle = decode_stealth_bundle(bundle_payload)
 
     # 5. Verify responder identity.
-    if expected_peer_identity is not None:
-        if stealth_bundle["responder_ed25519_pub"] != expected_peer_identity:
-            raise ProtocolError("Peer identity mismatch — possible MITM")
+    if expected_peer_identity is not None and stealth_bundle["responder_ed25519_pub"] != expected_peer_identity:
+        raise ProtocolError("Peer identity mismatch — possible MITM")
 
     # 6. Transcript binding (matches X3DH internal transcript order).
-    transcript_hash = build_transcript(
+    build_transcript(
         identity.public_key,
         alice_ephemeral_pub,
         stealth_bundle["responder_ed25519_pub"],
@@ -532,14 +530,13 @@ async def initiator_handshake(
         frame = await asyncio.wait_for(_read_frame(reader), timeout_secs)
     except asyncio.TimeoutError as exc:
         raise NetworkError("Handshake timed out waiting for Ok") from exc
-    envelope_payload = chacha20_poly1305_decrypt(
+    chacha20_poly1305_decrypt(
         handler_key,
         frame[: C.NONCE_LENGTH] + frame[C.NONCE_LENGTH :],
         HANDSHAKE_OK_AD,
     )
 
     # 10. Build the Double Ratchet session.
-    remote_dh = bob_spk  # responder's signed prekey public key
     session = Session.from_shared_secret(
         shared_secret=result.shared_secret,
         local_dh_private=alice_ephemeral.private_key_bytes,
@@ -556,13 +553,13 @@ async def responder_handshake(
     identity: Ed25519KeyPair,
     identity_x25519: X25519KeyPair,
     signed_prekey: X25519KeyPair,
-    onetime_prekey: Optional[X25519KeyPair],
+    onetime_prekey: X25519KeyPair | None,
     our_device_id: bytes = bytes(16),
     timeout_secs: int = 30,
-    expected_peer_identity: Optional[bytes] = None,
+    expected_peer_identity: bytes | None = None,
     use_pq: bool = False,
-    our_pq_secret_key: Optional[bytes] = None,
-    peer_pq_ciphertext: Optional[bytes] = None,
+    our_pq_secret_key: bytes | None = None,
+    peer_pq_ciphertext: bytes | None = None,
 ) -> tuple[Session, bytes]:
     """Run the responder (Bob) side of the P2P handshake.
 
@@ -589,13 +586,6 @@ async def responder_handshake(
     handler_key = derive_handshake_key(bob_ephemeral, alice_ephemeral_pub)
 
     # Build the stealth bundle directly from individual fields.
-    stealth_bundle = {
-        "responder_ed25519_pub": identity.public_key,
-        "responder_x25519_pub": identity_x25519.public_key,
-        "responder_device_id": our_device_id,
-        "responder_signed_prekey": signed_prekey.public_key,
-        "responder_onetime_prekey": onetime_prekey.public_key if onetime_prekey else None,
-    }
     bundle_payload = encode_stealth_bundle(
         responder_ed25519_pub=identity.public_key,
         responder_x25519_pub=identity_x25519.public_key,
@@ -615,7 +605,7 @@ async def responder_handshake(
     stealth_envelope = decode_stealth_envelope(envelope_payload)
 
     # 4. Transcript binding (matches X3DH responder transcript order).
-    transcript_hash = build_transcript(
+    build_transcript(
         stealth_envelope["initiator_ed25519_pub"],
         alice_ephemeral_pub,
         identity.public_key,
@@ -642,7 +632,6 @@ async def responder_handshake(
     await _encrypt_send(writer, handler_key, HANDSHAKE_OK_AD, b"OK")
 
     # 7. Build the Double Ratchet session.
-    remote_dh = alice_ephemeral_pub  # initiator's ephemeral public key
     session = Session.from_shared_secret(
         shared_secret=result.shared_secret,
         local_dh_private=signed_prekey.private_key_bytes,
@@ -654,21 +643,21 @@ async def responder_handshake(
 
 
 __all__ = [
-    "P2pConfig",
-    "P2pError",
-    "NetworkError",
-    "ProtocolError",
-    "Hello",
+    "P2P_PROTOCOL_VERSION",
     "Bundle",
     "Envelope",
+    "Hello",
+    "NetworkError",
     "Ok",
-    "P2P_PROTOCOL_VERSION",
-    "derive_handshake_key",
+    "P2pConfig",
+    "P2pError",
+    "ProtocolError",
     "build_transcript",
-    "encode_stealth_bundle",
     "decode_stealth_bundle",
-    "encode_stealth_envelope",
     "decode_stealth_envelope",
+    "derive_handshake_key",
+    "encode_stealth_bundle",
+    "encode_stealth_envelope",
     "initiator_handshake",
     "responder_handshake",
 ]

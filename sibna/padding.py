@@ -23,7 +23,6 @@ confidentiality. It only hides message size from network observers.
 from __future__ import annotations
 
 import os
-from typing import Literal
 
 from . import constants as C
 from .errors import CryptoError, ValidationError
@@ -135,11 +134,11 @@ unpad_payload = unpad_message
 
 
 __all__ = [
-    "PaddingMode",
-    "PADDING_MIN_OVERHEAD",
     "MAX_PADDING_BYTES",
+    "PADDING_MIN_OVERHEAD",
+    "PaddingMode",
     "pad_message",
-    "unpad_message",
     "pad_payload",
+    "unpad_message",
     "unpad_payload",
 ]

@@ -58,13 +58,13 @@ class SessionNotFoundError(SibnaError):
 
 
 __all__ = [
-    "SibnaError",
     "AuthError",
-    "NetworkError",
     "CryptoError",
-    "ValidationError",
-    "ProtocolError",
-    "StorageError",
     "KeyNotFoundError",
+    "NetworkError",
+    "ProtocolError",
     "SessionNotFoundError",
+    "SibnaError",
+    "StorageError",
+    "ValidationError",
 ]

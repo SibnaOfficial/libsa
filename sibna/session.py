@@ -10,16 +10,14 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from . import constants as C
-from .crypto import X25519KeyPair, Ed25519KeyPair, random_bytes
-from .errors import CryptoError, SessionNotFoundError
-from .ratchet import ChainKey, DoubleRatchet, HEADER_SIZE
+from .crypto import X25519KeyPair
+from .errors import CryptoError
+from .ratchet import HEADER_SIZE, DoubleRatchet
 from .x3dh import (
     PreKeyBundle,
-    X3DHResult,
-    generate_peer_bundle,
     x3dh_initiator,
     x3dh_responder,
 )
@@ -50,13 +48,13 @@ class Session:
         pt = session.decrypt(ct)
     """
 
-    def __init__(self, config: Optional[SessionConfig] = None):
+    def __init__(self, config: SessionConfig | None = None):
         self.config = config or SessionConfig()
-        self._ratchet: Optional[DoubleRatchet] = None
+        self._ratchet: DoubleRatchet | None = None
         self._session_id = str(uuid.uuid4())
-        self._established_at: Optional[float] = None
-        self._peer_id: Optional[bytes] = None
-        self._role_is_initiator: Optional[bool] = None
+        self._established_at: float | None = None
+        self._peer_id: bytes | None = None
+        self._role_is_initiator: bool | None = None
 
     @property
     def session_id(self) -> str:
@@ -67,11 +65,11 @@ class Session:
         return self._ratchet is not None
 
     @property
-    def established_at(self) -> Optional[float]:
+    def established_at(self) -> float | None:
         return self._established_at
 
     @property
-    def peer_id(self) -> Optional[bytes]:
+    def peer_id(self) -> bytes | None:
         return self._peer_id
 
     @property
@@ -123,13 +121,13 @@ class Session:
         self,
         identity: X25519KeyPair,
         signed_prekey: X25519KeyPair,
-        onetime_prekey: Optional[X25519KeyPair],
+        onetime_prekey: X25519KeyPair | None,
         peer_identity: bytes,
         peer_ephemeral: bytes,
         our_device_id: bytes = bytes(16),
         peer_device_id: bytes = bytes(16),
-        our_pq_secret_key: Optional[bytes] = None,
-        peer_pq_ciphertext: Optional[bytes] = None,
+        our_pq_secret_key: bytes | None = None,
+        peer_pq_ciphertext: bytes | None = None,
     ) -> None:
         """Perform X3DH as responder and initialize the Double Ratchet."""
         result = x3dh_responder(
@@ -163,7 +161,7 @@ class Session:
         local_dh_private: bytes,
         remote_dh_public: bytes,
         role_is_initiator: bool,
-    ) -> "Session":
+    ) -> Session:
         s = cls()
         s._ratchet = DoubleRatchet.from_shared_secret(
             shared_secret=shared_secret,
@@ -222,7 +220,7 @@ class Session:
 
 
 __all__ = [
+    "HEADER_SIZE",
     "Session",
     "SessionConfig",
-    "HEADER_SIZE",
 ]
