@@ -53,7 +53,7 @@ jobs:
       - name: Install black
         run: python -m pip install black==26.10.1
       - name: Check formatting
-        run: python -m black --check sibna
+        run: python -m black --check scripts
 
   lint:
     name: Lint

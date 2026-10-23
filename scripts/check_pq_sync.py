@@ -140,10 +140,14 @@ def main() -> int:
     all_match = check_parity(sdk_python_dir)
 
     if all_match:
-        print("\nAll SDK source files match between libsa/sibna/ and sibna-protc/sdks/python/sibna/")
+        print(
+            "\nAll SDK source files match between libsa/sibna/ and sibna-protc/sdks/python/sibna/"
+        )
         return 0
     else:
-        print("\nDIFFERENCES FOUND - libsa/sibna/ and sibna-protc/sdks/python/sibna/ are out of sync")
+        print(
+            "\nDIFFERENCES FOUND - libsa/sibna/ and sibna-protc/sdks/python/sibna/ are out of sync"
+        )
         return 1
 
 
