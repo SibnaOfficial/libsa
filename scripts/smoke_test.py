@@ -32,7 +32,7 @@ bob_bundle = generate_peer_bundle(
 
 # Alice performs X3DH as initiator
 alice_session = Session()
-alice_session.initiate_as_initiator(
+ephemeral_pub = alice_session.initiate_as_initiator(
     identity=alice_x,
     ephemeral=X25519KeyPair(),
     peer_bundle=bob_bundle,
