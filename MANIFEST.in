@@ -1,4 +1,6 @@
 include README.md
 include LICENSE
 include pyproject.toml
-recursive-include sibna *.dll *.so *.dylib
+include sibna/py.typed
+recursive-include sibna *.py
+recursive-include tests *.py

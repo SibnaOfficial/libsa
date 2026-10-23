@@ -1,604 +1,421 @@
 """
-Sibna Protocol — HTTP + WebSocket Client
-==========================================
+Sibna Protocol v3.0.1 — Relay transport client.
 
-Handles server communication: authentication, prekey management,
-message sending and receiving.
+Unified synchronous HTTP + asynchronous WebSocket client for the Sibna relay
+server (`server/`). Matches the retained server API exactly:
 
-No external dependencies — uses only Python stdlib:
-    urllib.request  — HTTP
-    asyncio         — async/await
-    hashlib, hmac   — hashing
-    ssl, socket     — TLS/WebSocket (via _websocket module)
+  POST /v1/auth/challenge   {identity_key_hex}          -> {challenge_hex, expires_in}
+  POST /v1/auth/prove       {identity_key_hex, challenge_hex, signature_hex} -> {token, expires_in}
+  POST /v1/prekeys/upload   {bundle_hex, is_last_resort} -> 200
+  GET  /v1/prekeys/{root_id}                       -> {bundles_hex: [...]}
+  POST /v1/messages/send   {recipient_id, payload_hex, compressed} -> 200/202
+  GET  /v1/messages/inbox?identity_key_hex=&token=  -> {messages: [...], count}
+  WS   /ws?token=<jwt>                             -> binary WsMessage frames
 
-Ed25519 signing is provided by the bundled _ed25519 module (pure Python).
+Authentication is Ed25519 challenge-response → HS256 JWT. The JWT is sent
+via the WebSocket ``?token=`` query parameter (matching `server/src/ws.rs`),
+NOT via the Authorization header, to remain interoperable with the retained
+relay server.
 
-Usage (sync):
-    from sibna.client import SibnaClient
-
-    client = SibnaClient(server="http://localhost:8080")
-    client.generate_identity()
-    client.authenticate()
-    client.upload_prekey(bundle_hex)
-    client.send_message(recipient_id="<hex>", payload_hex="<hex>")
-    messages = client.fetch_inbox()
-
-Usage (async + WebSocket):
-    from sibna.client import AsyncSibnaClient
-    import asyncio
-
-    async def main():
-        client = AsyncSibnaClient(server="http://localhost:8080")
-        client.generate_identity()
-        await client.authenticate()
-        await client.connect(on_message=my_handler)
-
-    asyncio.run(main())
+TLS certificate pinning is supported via ``pinned_cert`` and is never
+silently disabled.
 """
 
-__version__ = "1.0.0"
+from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
-import secrets
-import ssl
 import struct
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, cast, Dict, List, Optional
 
-from sibna import _ed25519
-from sibna._websocket import AsyncWebSocket, WebSocketError
+import aiohttp
+import requests
+import ssl
 
-# ── Exceptions ────────────────────────────────────────────────────────────────
+from . import constants as C
+from .crypto import Ed25519KeyPair
+from .envelope import make_signed_envelope, verify_signed_envelope
+from .errors import AuthError, CryptoError, NetworkError, SibnaError
 
-class SibnaClientError(Exception):
-    def __init__(self, message: str, status_code: int = 0):
-        self.status_code = status_code
-        super().__init__(message)
-
-class AuthError(SibnaClientError):
-    """Authentication with the server failed."""
-
-class NetworkError(SibnaClientError):
-    """HTTP or WebSocket error."""
-
-
-# ── Identity (Ed25519 — pure Python, no external deps) ────────────────────────
 
 class Identity:
-    """
-    Ed25519 keypair for server authentication.
+    """Ed25519 identity keypair used for authentication and message signing."""
 
-    Generated entirely in Python using the bundled _ed25519 module —
-    no external packages needed.
-
-    This identity is separate from the encryption keys in sibna.Context.
-    It is only used for the server's JWT challenge-response flow.
-    """
-
-    def __init__(self, seed: Optional[bytes] = None):
-        """
-        Args:
-            seed: 32-byte private key seed. If None, a random one is generated.
-        """
-        if seed is not None:
-            if len(seed) != 32:
-                raise ValueError("seed must be 32 bytes")
-            self._seed = seed
+    def __init__(self, private_key_bytes: Optional[bytes] = None):
+        if private_key_bytes is None:
+            self._private = Ed25519KeyPair()
         else:
-            self._seed = os.urandom(32)
-
-        self._public = _ed25519.public_key(self._seed)
+            self._private = Ed25519KeyPair.from_seed(private_key_bytes)
 
     @property
     def public_key_bytes(self) -> bytes:
-        """32-byte Ed25519 public key."""
-        return self._public
+        return self._private.public_key
+
+    @property
+    def public_key(self) -> bytes:
+        return self.public_key_bytes
 
     @property
     def public_key_hex(self) -> str:
-        return self._public.hex()
+        return self.public_key_bytes.hex()
 
     @property
-    def seed_bytes(self) -> bytes:
-        """32-byte private key seed. Keep secret."""
-        return self._seed
+    def private_key_bytes(self) -> bytes:
+        return self._private.private_key
 
     def sign(self, data: bytes) -> bytes:
-        """Sign data. Returns 64-byte signature."""
-        return _ed25519.sign(self._seed, data)
+        return self._private.sign(data)
 
     def sign_hex(self, data: bytes) -> str:
         return self.sign(data).hex()
 
     def save(self, path: str) -> None:
-        """Save seed to file with permissions 600."""
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        directory = os.path.dirname(os.path.abspath(path))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
         with open(path, "wb") as f:
-            f.write(self._seed)
+            f.write(self.private_key_bytes)
         try:
             os.chmod(path, 0o600)
         except OSError:
-            pass  # Windows doesn't support chmod
+            pass  # Filesystem may not support chmod (e.g. some Windows setups)
 
     @classmethod
     def load(cls, path: str) -> "Identity":
-        """Load identity from a saved seed file."""
         with open(path, "rb") as f:
-            return cls(seed=f.read())
+            return cls(private_key_bytes=f.read())
 
     def __repr__(self) -> str:
-        return f"<Identity pub={self.public_key_hex[:16]}...>"
+        return f"<Identity public_key={self.public_key_hex[:16]}...>"
 
 
-# ── Envelope helpers ──────────────────────────────────────────────────────────
+# ── HTTP (sync) client ────────────────────────────────────────────────
 
-_PADDING_BLOCK = 1024
-
-
-def pad_payload(data: bytes) -> bytes:
-    """
-    Pad payload to the nearest 1024-byte boundary.
-    Makes all messages appear the same size to a passive observer.
-
-    Format: [padding_len: 2 bytes LE] + [data] + [random padding]
-    Total length is always a multiple of 1024.
-    """
-    content_len  = 2 + len(data)
-    remainder    = content_len % _PADDING_BLOCK
-    padding_len  = (_PADDING_BLOCK - remainder) % _PADDING_BLOCK
-    header       = padding_len.to_bytes(2, "little")
-    return header + data + secrets.token_bytes(padding_len)
-
-
-def unpad_payload(padded: bytes) -> bytes:
-    """Remove padding added by pad_payload()."""
-    if len(padded) < 2:
-        raise ValueError("Payload too short")
-    padding_len = int.from_bytes(padded[:2], "little")
-    data_end    = len(padded) - padding_len
-    if data_end < 2:
-        raise ValueError("Invalid padding length")
-    return padded[2:data_end]
-
-
-def make_signed_envelope(
-    identity: Identity,
-    recipient_id: str,
-    payload_hex: str,
-) -> Dict[str, Any]:
-    """
-    Create a signed sealed envelope for sending via the server.
-
-    The server sees only the recipient_id. payload_hex is already
-    encrypted by sibna.Context — the server cannot read it.
-
-    The signature ensures the recipient can verify the sender's identity.
-    """
-    message_id = str(uuid.uuid4())
-    timestamp  = int(time.time())
-
-    h = hashlib.sha512()
-    h.update(recipient_id.encode())
-    h.update(payload_hex.encode())
-    h.update(struct.pack("<q", timestamp))
-    h.update(message_id.encode())
-
-    return {
-        "recipient_id": recipient_id,
-        "payload_hex":  payload_hex,
-        "sender_id":    identity.public_key_hex,
-        "timestamp":    timestamp,
-        "message_id":   message_id,
-        "signature_hex": identity.sign_hex(h.digest()),
-    }
-
-
-def verify_signed_envelope(envelope: Dict[str, Any]) -> bool:
-    """
-    Verify the Ed25519 signature on a received envelope.
-
-    Always call this before processing any incoming message.
-
-    Returns True if valid and recent (< 5 minutes old), False otherwise.
-    """
-    try:
-        pub = bytes.fromhex(envelope["sender_id"])
-        sig = bytes.fromhex(envelope["signature_hex"])
-
-        h = hashlib.sha512()
-        h.update(envelope["recipient_id"].encode())
-        h.update(envelope["payload_hex"].encode())
-        h.update(struct.pack("<q", envelope["timestamp"]))
-        h.update(envelope["message_id"].encode())
-
-        if not _ed25519.verify(pub, h.digest(), sig):
-            return False
-
-        # Reject messages older than 5 minutes
-        if abs(int(time.time()) - envelope["timestamp"]) > 300:
-            return False
-
-        return True
-    except Exception:
-        return False
-
-
-# ── HTTP helper (stdlib urllib) ───────────────────────────────────────────────
-
-def _http(
-    method: str,
-    url: str,
-    body: Optional[dict] = None,
-    params: Optional[dict] = None,
-    headers: Optional[dict] = None,
-    timeout: int = 30,
-) -> dict:
-    """
-    Make an HTTP request using urllib (stdlib only).
-    Returns the parsed JSON response body.
-    Raises NetworkError or AuthError on failure.
-    """
-    if params:
-        url += "?" + urllib.parse.urlencode(params)
-
-    data = json.dumps(body).encode() if body is not None else None
-
-    req_headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    if headers:
-        req_headers.update(headers)
-
-    req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode(errors="replace")[:300]
-        if e.code == 401:
-            raise AuthError(f"Unauthorized ({url}): {body_text}", 401)
-        if e.code == 429:
-            raise NetworkError(f"Rate limited ({url})", 429)
-        raise NetworkError(f"HTTP {e.code} on {url}: {body_text}", e.code)
-    except urllib.error.URLError as e:
-        raise NetworkError(f"Connection failed ({url}): {e.reason}")
-
-
-# ── Sync HTTP Client ──────────────────────────────────────────────────────────
 
 class SibnaClient:
-    """
-    Synchronous HTTP client for the Sibna Protocol server.
+    """Synchronous Sibna relay client (HTTP REST)."""
 
-    No external dependencies — uses only Python stdlib (urllib).
-
-    Handles:
-    - Ed25519 challenge-response authentication → JWT
-    - PreKey Bundle upload
-    - Message sending (REST fallback)
-    - Inbox polling for offline messages
-
-    The actual encryption is done separately by sibna.Context.
-    This client only transports already-encrypted payloads.
-    """
-
-    def __init__(self, server: str = "http://localhost:8080"):
-        self.server    = server.rstrip("/")
+    def __init__(
+        self,
+        server: str = "http://localhost:8080",
+        pinned_cert: Optional[str] = None,
+        timeout: float = 30.0,
+    ):
+        self.server = server.rstrip("/")
         self.identity: Optional[Identity] = None
-        self.jwt_token: Optional[str]     = None
+        self.jwt_token: Optional[str] = None
+        self.timeout = timeout
+        self._session = requests.Session()
 
-    def generate_identity(self, seed: Optional[bytes] = None) -> Identity:
-        """
-        Generate (or load) an Ed25519 identity for server authentication.
+        if pinned_cert is not None:
+            if not os.path.isfile(pinned_cert):
+                raise ValueError(f"pinned_cert path does not exist: {pinned_cert!r}")
+            self._session.verify = pinned_cert
+        elif server.startswith("https://"):
+            import warnings
 
-        Args:
-            seed: 32-byte private key seed. If None, a new random key is generated.
+            warnings.warn(
+                "SibnaClient: HTTPS server configured without certificate pinning. "
+                "Pass pinned_cert='/path/to/server.pem' to enable pinning.",
+                stacklevel=2,
+            )
 
-        Returns:
-            The Identity object (also stored in self.identity).
-        """
-        self.identity = Identity(seed)
+    # ── Identity ────────────────────────────────────────────────────
+
+    def generate_identity(self, private_key_bytes: Optional[bytes] = None) -> Identity:
+        self.identity = Identity(private_key_bytes)
         return self.identity
 
+    # ── Auth ────────────────────────────────────────────────────────
+
     def authenticate(self) -> str:
-        """
-        Authenticate with the server via Ed25519 challenge-response.
-
-        Steps:
-        1. Request a challenge from the server
-        2. Sign the challenge with the private key
-        3. Submit the signature and receive a JWT
-
-        Returns:
-            str: JWT token (stored in self.jwt_token).
-
-        Raises:
-            AuthError: If generate_identity() was not called first,
-                       or if authentication fails.
-        """
+        """Ed25519 challenge-response → JWT (stored in self.jwt_token)."""
         if not self.identity:
-            raise AuthError("Call generate_identity() before authenticate()")
+            raise AuthError("No identity loaded. Call generate_identity() first.")
 
-        resp = _http("POST", f"{self.server}/v1/auth/challenge", body={
-            "identity_key_hex": self.identity.public_key_hex,
-        })
-        challenge_hex = resp["challenge_hex"]
+        r = self._session.post(
+            f"{self.server}/v1/auth/challenge",
+            json={"identity_key_hex": self.identity.public_key_hex},
+            timeout=self.timeout,
+        )
+        self._check_response(r, "auth/challenge")
+        challenge_hex = r.json()["challenge_hex"]
 
-        resp = _http("POST", f"{self.server}/v1/auth/prove", body={
-            "identity_key_hex": self.identity.public_key_hex,
-            "challenge_hex":    challenge_hex,
-            "signature_hex":    self.identity.sign_hex(bytes.fromhex(challenge_hex)),
-        })
-        self.jwt_token = resp["token"]
+        challenge_bytes = bytes.fromhex(challenge_hex)
+        signature_hex = self.identity.sign_hex(challenge_bytes)
+
+        r = self._session.post(
+            f"{self.server}/v1/auth/prove",
+            json={
+                "identity_key_hex": self.identity.public_key_hex,
+                "challenge_hex": challenge_hex,
+                "signature_hex": signature_hex,
+            },
+            timeout=self.timeout,
+        )
+        self._check_response(r, "auth/prove")
+        self.jwt_token = r.json()["token"]
         return self.jwt_token
 
-    def upload_prekey(self, bundle_hex: str) -> None:
-        """
-        Upload a PreKey Bundle to the server.
+    def health(self) -> Dict[str, Any]:
+        r = self._session.get(f"{self.server}/health", timeout=self.timeout)
+        self._check_response(r, "health")
+        return cast(Dict[str, Any], r.json())
 
-        bundle_hex comes from: sibna.Context.generate_prekey_bundle().hex()
+    # ── PreKeys ─────────────────────────────────────────────────────
 
-        Requires authentication first.
-        """
-        self._require_auth()
-        _http("POST", f"{self.server}/v1/prekeys/upload",
-              body={"bundle_hex": bundle_hex},
-              headers=self._auth_headers())
+    def upload_prekey(self, bundle_hex: str, is_last_resort: bool = False) -> None:
+        headers: Dict[str, str] = {}
+        if self.jwt_token:
+            headers["Authorization"] = f"Bearer {self.jwt_token}"
+        r = self._session.post(
+            f"{self.server}/v1/prekeys/upload",
+            json={"bundle_hex": bundle_hex, "is_last_resort": is_last_resort},
+            headers=headers,
+            timeout=self.timeout,
+        )
+        self._check_response(r, "prekeys/upload")
 
-    def fetch_prekeys(self, identity_key_hex: str) -> List[str]:
-        """
-        Fetch a peer's PreKey Bundles from the server.
+    def fetch_prekeys(self, root_id_hex: str) -> List[str]:
+        headers: Dict[str, str] = {}
+        if self.jwt_token:
+            headers["Authorization"] = f"Bearer {self.jwt_token}"
+        r = self._session.get(
+            f"{self.server}/v1/prekeys/{root_id_hex}", headers=headers, timeout=self.timeout
+        )
+        self._check_response(r, "prekeys/fetch")
+        return cast(List[str], r.json()["bundles_hex"])
 
-        Args:
-            identity_key_hex: The peer's Ed25519 public key in hex.
-
-        Returns:
-            List[str]: PreKey Bundle(s) in hex.
-                       Pass bytes.fromhex(bundle) to sibna.Context.perform_handshake().
-
-        Note: Bundles are deleted from the server after fetching (one-time use).
-        """
-        resp = _http("GET", f"{self.server}/v1/prekeys/{identity_key_hex}")
-        return resp["bundles_hex"]
+    # ── Messages ────────────────────────────────────────────────────
 
     def send_message(
         self,
         recipient_id: str,
         payload_hex: str,
         sign: bool = True,
+        compress: bool = False,
     ) -> int:
-        """
-        Send an encrypted message via REST.
-
-        payload_hex must be the output of sibna.Context.session_encrypt().hex().
-        The server cannot read the payload.
-
-        Args:
-            recipient_id: Recipient's identity key in hex.
-            payload_hex:  The encrypted payload in hex.
-            sign:         Add an Ed25519 signature for end-to-end integrity.
-                          Requires generate_identity() to have been called.
-
-        Returns:
-            int: HTTP status code.
-                 200 = delivered live, 202 = queued (recipient offline).
-        """
+        """Send a sealed envelope via REST (200 = live, 202 = queued offline)."""
         if sign and self.identity:
-            body = make_signed_envelope(self.identity, recipient_id, payload_hex)
+            body = make_signed_envelope(
+                self.identity, recipient_id, payload_hex, compressed=compress
+            )
         else:
-            body = {"recipient_id": recipient_id, "payload_hex": payload_hex}
+            body = {
+                "recipient_id": recipient_id,
+                "payload_hex": payload_hex,
+                "compressed": compress,
+            }
 
-        _http("POST", f"{self.server}/v1/messages/send",
-              body=body, headers=self._auth_headers())
-        return 200
+        headers: Dict[str, str] = {}
+        if self.jwt_token:
+            headers["Authorization"] = f"Bearer {self.jwt_token}"
+
+        r = self._session.post(
+            f"{self.server}/v1/messages/send",
+            json=body,
+            headers=headers,
+            timeout=self.timeout,
+        )
+        self._check_response(r, "messages/send")
+        return r.status_code
 
     def fetch_inbox(self) -> List[Dict[str, Any]]:
-        """
-        Fetch queued messages from the server inbox.
-
-        Automatically verifies the Ed25519 signature on each message
-        and drops any with an invalid signature.
-
-        Messages are deleted from the server after retrieval.
-
-        Returns:
-            List[dict]: Verified envelopes. Each has:
-                - sender_id    (hex): peer's identity key
-                - payload_hex  (hex): encrypted payload — decrypt with:
-                  sibna.Context.session_decrypt(
-                      bytes.fromhex(msg["sender_id"]),
-                      bytes.fromhex(msg["payload_hex"])
-                  )
-                - message_id, timestamp, signature_hex
-
-        Raises:
-            AuthError: If not authenticated.
-        """
-        self._require_auth()
-        resp = _http(
-            "GET", f"{self.server}/v1/messages/inbox",
-            params={
-                "identity_key_hex": self.identity.public_key_hex,
-                "token":            self.jwt_token,
-            },
+        if not self.identity or not self.jwt_token:
+            raise AuthError("Must authenticate before fetching inbox.")
+        headers: Dict[str, str] = {}
+        if self.jwt_token:
+            headers["Authorization"] = f"Bearer {self.jwt_token}"
+        r = self._session.get(
+            f"{self.server}/v1/messages/inbox",
+            headers=headers,
+            params={"identity_key_hex": self.identity.public_key_hex},
+            timeout=self.timeout,
         )
+        self._check_response(r, "messages/inbox")
+        messages = r.json().get("messages", [])
         verified = []
-        for msg in resp.get("messages", []):
+        for msg in messages:
             if verify_signed_envelope(msg):
                 verified.append(msg)
-            else:
-                print(f"[sibna] Dropped message with invalid signature: {msg.get('message_id')}")
         return verified
 
-    def health(self) -> Dict[str, Any]:
-        """Check server health."""
-        return _http("GET", f"{self.server}/health")
+    # ── Internal ────────────────────────────────────────────────────
 
-    def _require_auth(self) -> None:
-        if not self.identity or not self.jwt_token:
-            raise AuthError("Call authenticate() first")
-
-    def _auth_headers(self) -> Dict[str, str]:
-        if self.jwt_token:
-            return {"Authorization": f"Bearer {self.jwt_token}"}
-        return {}
+    def _check_response(self, r: requests.Response, endpoint: str) -> None:
+        if r.status_code == 429:
+            raise NetworkError(f"Rate limited on {endpoint}", 429)
+        if r.status_code == 401:
+            raise AuthError(f"Unauthorized on {endpoint}", 401)
+        if r.status_code >= 400:
+            raise NetworkError(
+                f"{endpoint} failed: HTTP {r.status_code} — {r.text[:200]}",
+                r.status_code,
+            )
 
     def __repr__(self) -> str:
-        pub = self.identity.public_key_hex[:16] if self.identity else "None"
-        return f"<SibnaClient server={self.server} identity={pub}...>"
+        identity_str = self.identity.public_key_hex[:16] if self.identity else "None"
+        return f"<SibnaClient server={self.server} identity={identity_str}...>"
 
 
-# ── Async WebSocket Client ────────────────────────────────────────────────────
+# ── Async WebSocket client ───────────────────────────────────────────
+
 
 class AsyncSibnaClient:
-    """
-    Async client with WebSocket support for real-time messaging.
+    """Async Sibna relay client with WebSocket real-time relay."""
 
-    No external dependencies — uses only asyncio + stdlib ssl/socket.
+    def __init__(
+        self,
+        server: str = "http://localhost:8080",
+        pinned_cert: Optional[str] = None,
+    ):
+        try:
+            import aiohttp  # noqa: F401
+        except ImportError as exc:  # pragma: no cover - environment-dependent
+            raise NetworkError(
+                "aiohttp required for AsyncSibnaClient: pip install aiohttp"
+            ) from exc
 
-    Usage:
-        client = AsyncSibnaClient(server="http://localhost:8080")
-        client.generate_identity()
-        await client.authenticate()
-        await client.connect(on_message=my_handler)
-        await client.send(recipient_id="<hex>", payload_hex="<hex>")
-    """
+        self.server = server.rstrip("/")
+        self.ws_server = server.replace("http://", "ws://").replace("https://", "wss://")
+        self.identity: Optional[Identity] = None
+        self.jwt_token: Optional[str] = None
+        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._on_message: Optional[Callable[..., Any]] = None
+        self._pinned_cert = pinned_cert
 
-    def __init__(self, server: str = "http://localhost:8080"):
-        self.server     = server.rstrip("/")
-        self.ws_server  = (server
-                           .replace("http://", "ws://")
-                           .replace("https://", "wss://")
-                           .rstrip("/"))
-        self.identity:  Optional[Identity] = None
-        self.jwt_token: Optional[str]      = None
-        self._ws:       Optional[AsyncWebSocket] = None
+        if pinned_cert is not None and not os.path.isfile(pinned_cert):
+            raise ValueError(f"pinned_cert path does not exist: {pinned_cert!r}")
 
-    def generate_identity(self, seed: Optional[bytes] = None) -> Identity:
-        """Generate (or load) an Ed25519 identity."""
-        self.identity = Identity(seed)
+    def _make_ssl_context(self) -> ssl.SSLContext:
+        ctx = ssl.create_default_context()
+        if self._pinned_cert:
+            ctx.load_verify_locations(cafile=self._pinned_cert)
+        return ctx
+
+    def generate_identity(self, private_key_bytes: Optional[bytes] = None) -> Identity:
+        self.identity = Identity(private_key_bytes)
         return self.identity
 
     async def authenticate(self) -> str:
-        """
-        Async Ed25519 challenge-response authentication.
 
-        Returns: JWT token.
-        Raises: AuthError if identity not set or auth fails.
-        """
         if not self.identity:
-            raise AuthError("Call generate_identity() first")
+            raise AuthError("No identity loaded.")
+        ssl_ctx = self._make_ssl_context() if self.server.startswith("https://") else None
+        connector = aiohttp.TCPConnector(ssl=ssl_ctx) if ssl_ctx else None
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.post(
+                f"{self.server}/v1/auth/challenge",
+                json={"identity_key_hex": self.identity.public_key_hex},
+            ) as r:
+                if r.status != 200:
+                    raise AuthError(f"Challenge failed: {r.status}")
+                data = await r.json()
+                challenge_hex = data["challenge_hex"]
 
-        loop = asyncio.get_event_loop()
+            signature_hex = self.identity.sign_hex(bytes.fromhex(challenge_hex))
+            async with session.post(
+                f"{self.server}/v1/auth/prove",
+                json={
+                    "identity_key_hex": self.identity.public_key_hex,
+                    "challenge_hex": challenge_hex,
+                    "signature_hex": signature_hex,
+                },
+            ) as r:
+                if r.status != 200:
+                    raise AuthError(f"Prove failed: {r.status}")
+                data = await r.json()
+                self.jwt_token = data["token"]
+                return self.jwt_token
 
-        # Run blocking HTTP in thread pool to avoid blocking event loop
-        resp = await loop.run_in_executor(
-            None,
-            lambda: _http("POST", f"{self.server}/v1/auth/challenge",
-                          body={"identity_key_hex": self.identity.public_key_hex})
-        )
-        challenge_hex = resp["challenge_hex"]
+    async def connect(self, on_message: Optional[Callable[..., Any]] = None) -> None:
+        """Connect to the WebSocket relay.
 
-        resp = await loop.run_in_executor(
-            None,
-            lambda: _http("POST", f"{self.server}/v1/auth/prove", body={
-                "identity_key_hex": self.identity.public_key_hex,
-                "challenge_hex":    challenge_hex,
-                "signature_hex":    self.identity.sign_hex(bytes.fromhex(challenge_hex)),
-            })
-        )
-        self.jwt_token = resp["token"]
-        return self.jwt_token
-
-    async def connect(self, on_message: Optional[Callable] = None) -> None:
+        The JWT is sent via the ``?token=`` query parameter, matching the
+        retained server (`server/src/ws.rs`).
         """
-        Connect to the WebSocket relay and listen for incoming messages.
+        import aiohttp
 
-        Automatically verifies the signature of every incoming message
-        and drops those with invalid signatures.
-
-        Args:
-            on_message: Async callback invoked for each verified message.
-                        Signature: async def handler(envelope: dict) -> None
-        """
         if not self.jwt_token:
-            raise AuthError("Call authenticate() first")
+            raise AuthError("Must authenticate before connecting.")
+        self._on_message = on_message
 
-        ws_url  = f"{self.ws_server}/ws?token={self.jwt_token}"
-        headers = {}
-        if self.identity:
-            headers["X-Identity"] = self.identity.public_key_hex
+        ssl_ctx = self._make_ssl_context() if self.ws_server.startswith("wss://") else None
+        connector = aiohttp.TCPConnector(ssl=ssl_ctx) if ssl_ctx else None
 
-        self._ws = AsyncWebSocket(ws_url, headers=headers)
-        async with self._ws:
-            while True:
-                try:
-                    raw = await self._ws.recv()
-                    envelope = json.loads(raw)
-                    if verify_signed_envelope(envelope):
-                        if on_message:
-                            await on_message(envelope)
-                    else:
-                        print(f"[sibna] Invalid signature on {envelope.get('message_id')}")
-                except WebSocketError:
-                    break
-                except json.JSONDecodeError as e:
-                    print(f"[sibna] Failed to parse message: {e}")
+        ws_url = f"{self.ws_server}/ws?token={self.jwt_token}"
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.ws_connect(ws_url) as ws:
+                self._ws = ws
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.BINARY:
+                        try:
+                            ws_msg = json.loads(msg.data)
+                            msg_type = ws_msg.get("type", "envelope")
+                            if msg_type == "envelope":
+                                envelope = ws_msg.get("envelope", ws_msg)
+                                if verify_signed_envelope(envelope):
+                                    msg_id = envelope.get("message_id")
+                                    if msg_id:
+                                        await ws.send_bytes(
+                                            json.dumps(
+                                                {"type": "ack", "message_id": msg_id}
+                                            ).encode()
+                                        )
+                                    if self._on_message:
+                                        await self._on_message(envelope)
+                                else:
+                                    # Invalid signature — drop.
+                                    pass
+                            elif msg_type == "ack":
+                                # Delivery acknowledgement.
+                                if self._on_message:
+                                    await self._on_message(ws_msg)
+                            elif msg_type == "webrtc":
+                                if self._on_message:
+                                    await self._on_message(ws_msg)
+                        except Exception:
+                            pass
+                    elif msg.type == aiohttp.WSMsgType.ERROR:
+                        raise NetworkError(f"WebSocket error: {ws.exception()}")
 
     async def send(
         self,
         recipient_id: str,
         payload_hex: str,
         sign: bool = True,
+        compress: bool = False,
     ) -> None:
-        """
-        Send an encrypted message over the WebSocket.
-
-        payload_hex must be the output of sibna.Context.session_encrypt().hex().
-
-        Args:
-            recipient_id: Recipient's identity key in hex.
-            payload_hex:  The encrypted payload in hex.
-            sign:         Add an Ed25519 signature.
-        """
         if not self._ws:
             raise NetworkError("Not connected. Call connect() first.")
-
         if sign and self.identity:
-            envelope = make_signed_envelope(self.identity, recipient_id, payload_hex)
+            envelope = make_signed_envelope(
+                self.identity, recipient_id, payload_hex, compressed=compress
+            )
         else:
             envelope = {
                 "recipient_id": recipient_id,
-                "payload_hex":  payload_hex,
-                "message_id":   str(uuid.uuid4()),
-                "timestamp":    int(time.time()),
+                "payload_hex": payload_hex,
+                "compressed": compress,
+                "message_id": str(uuid.uuid4()),
+                "timestamp": int(time.time()),
             }
-        await self._ws.send(json.dumps(envelope))
+        ws_msg = {"type": "envelope", **envelope}
+        await self._ws.send_bytes(json.dumps(ws_msg).encode())
 
-    def __repr__(self) -> str:
-        pub = self.identity.public_key_hex[:16] if self.identity else "None"
-        return f"<AsyncSibnaClient server={self.server} identity={pub}...>"
+    async def close(self) -> None:
+        if self._ws is not None:
+            await self._ws.close()
+            self._ws = None
 
-
-# ── Exports ────────────────────────────────────────────────────────────────────
 
 __all__ = [
     "Identity",
     "SibnaClient",
     "AsyncSibnaClient",
-    "SibnaClientError",
-    "AuthError",
-    "NetworkError",
-    "pad_payload",
-    "unpad_payload",
     "make_signed_envelope",
     "verify_signed_envelope",
-    "__version__",
 ]
