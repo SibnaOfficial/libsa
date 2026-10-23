@@ -1,23 +1,28 @@
 """
-Sibna Protocol v3.0.1 — Session management.
+Sibna Protocol v3.0.1 — Session Management
 
-High-level session combining X3DH handshake with Double Ratchet encryption.
-Wire-compatible with the Rust core `DoubleRatchetSession`.
+High-level session that combines X3DH handshake with Double Ratchet
+encryption. Matches the Rust core's DoubleRatchetSession API.
 """
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Optional
 
-from . import constants as C
-from .crypto import X25519KeyPair
-from .errors import CryptoError
-from .ratchet import HEADER_SIZE, DoubleRatchet
+from .crypto import (
+    KEY_LENGTH,
+    X25519KeyPair,
+    Ed25519KeyPair,
+    random_bytes,
+)
+from .ratchet import DoubleRatchet, MAX_SKIPPED_MESSAGES
 from .x3dh import (
     PreKeyBundle,
+    X3DHResult,
     x3dh_initiator,
     x3dh_responder,
 )
@@ -27,8 +32,8 @@ from .x3dh import (
 class SessionConfig:
     """Session configuration."""
 
-    max_skipped_messages: int = C.MAX_SKIPPED_MESSAGES
-    max_chain_messages: int = C.MAX_CHAIN_MESSAGES
+    max_skipped_messages: int = MAX_SKIPPED_MESSAGES
+    max_chain_messages: int = 4000
 
 
 class Session:
@@ -36,25 +41,23 @@ class Session:
     Encrypted session combining X3DH + Double Ratchet.
 
     Usage:
-
         # Initiator
         session = Session()
-        session.initiate_as_initiator(identity_x25519, ephemeral, peer_bundle)
-        ct = session.encrypt(b"Hello!")
+        session.initiate_as_initiator(identity, ephemeral, peer_bundle)
+        ciphertext = session.encrypt(b"Hello!")
 
         # Responder
         session = Session()
         session.initiate_as_responder(identity, spk, opk, peer_identity, peer_ephemeral)
-        pt = session.decrypt(ct)
+        plaintext = session.decrypt(ciphertext)
     """
 
-    def __init__(self, config: SessionConfig | None = None):
+    def __init__(self, config: Optional[SessionConfig] = None):
         self.config = config or SessionConfig()
-        self._ratchet: DoubleRatchet | None = None
+        self._ratchet: Optional[DoubleRatchet] = None
         self._session_id = str(uuid.uuid4())
-        self._established_at: float | None = None
-        self._peer_id: bytes | None = None
-        self._role_is_initiator: bool | None = None
+        self._established_at: Optional[float] = None
+        self._peer_id: Optional[bytes] = None
 
     @property
     def session_id(self) -> str:
@@ -65,11 +68,11 @@ class Session:
         return self._ratchet is not None
 
     @property
-    def established_at(self) -> float | None:
+    def established_at(self) -> Optional[float]:
         return self._established_at
 
     @property
-    def peer_id(self) -> bytes | None:
+    def peer_id(self) -> Optional[bytes]:
         return self._peer_id
 
     @property
@@ -80,7 +83,7 @@ class Session:
     def messages_received(self) -> int:
         return self._ratchet.messages_received if self._ratchet else 0
 
-    # ── Initiator ──────────────────────────────────────────────────────
+    # ── Initiator (who creates the session first) ───────────────────────
 
     def initiate_as_initiator(
         self,
@@ -89,11 +92,10 @@ class Session:
         peer_bundle: PreKeyBundle,
         our_device_id: bytes = bytes(16),
         peer_device_id: bytes = bytes(16),
-        use_pq: bool = False,
     ) -> bytes:
-        """Perform X3DH as initiator and initialize the Double Ratchet.
-
-        Returns the ephemeral public key (to send to the responder).
+        """
+        Perform X3DH as initiator and initialize the Double Ratchet.
+        Returns the ephemeral public key (sent to responder).
         """
         result = x3dh_initiator(
             identity_keypair=identity,
@@ -101,7 +103,6 @@ class Session:
             peer_bundle=peer_bundle,
             our_device_id=our_device_id,
             peer_device_id=peer_device_id,
-            use_pq=use_pq,
         )
 
         self._ratchet = DoubleRatchet.from_shared_secret(
@@ -112,22 +113,20 @@ class Session:
         )
         self._established_at = time.time()
         self._peer_id = peer_bundle.identity_key
-        self._role_is_initiator = True
+
         return ephemeral.public_key
 
-    # ── Responder ──────────────────────────────────────────────────────
+    # ── Responder (who receives the first message) ──────────────────────
 
     def initiate_as_responder(
         self,
         identity: X25519KeyPair,
         signed_prekey: X25519KeyPair,
-        onetime_prekey: X25519KeyPair | None,
+        onetime_prekey: Optional[X25519KeyPair],
         peer_identity: bytes,
         peer_ephemeral: bytes,
         our_device_id: bytes = bytes(16),
         peer_device_id: bytes = bytes(16),
-        our_pq_secret_key: bytes | None = None,
-        peer_pq_ciphertext: bytes | None = None,
     ) -> None:
         """Perform X3DH as responder and initialize the Double Ratchet."""
         result = x3dh_responder(
@@ -138,8 +137,6 @@ class Session:
             peer_ephemeral=peer_ephemeral,
             our_device_id=our_device_id,
             peer_device_id=peer_device_id,
-            our_pq_secret_key=our_pq_secret_key,
-            peer_pq_ciphertext=peer_pq_ciphertext,
         )
 
         self._ratchet = DoubleRatchet.from_shared_secret(
@@ -150,9 +147,8 @@ class Session:
         )
         self._established_at = time.time()
         self._peer_id = peer_identity
-        self._role_is_initiator = False
 
-    # ── Restore from known shared secret (testing) ─────────────────────
+    # ── Restore from known shared secret (testing) ──────────────────────
 
     @classmethod
     def from_shared_secret(
@@ -161,7 +157,8 @@ class Session:
         local_dh_private: bytes,
         remote_dh_public: bytes,
         role_is_initiator: bool,
-    ) -> Session:
+    ) -> "Session":
+        """Restore a session from a known shared secret (for testing)."""
         s = cls()
         s._ratchet = DoubleRatchet.from_shared_secret(
             shared_secret=shared_secret,
@@ -172,24 +169,28 @@ class Session:
         s._established_at = time.time()
         return s
 
-    # ── Encrypt / Decrypt ──────────────────────────────────────────────
+    # ── Encrypt / Decrypt ───────────────────────────────────────────────
 
-    def encrypt(self, plaintext: bytes, associated_data: bytes = b"") -> bytes:
+    def encrypt(
+        self, plaintext: bytes, associated_data: bytes = b""
+    ) -> bytes:
         """Encrypt a message."""
         if self._ratchet is None:
-            raise CryptoError("Session not established")
+            raise RuntimeError("Session not established")
         return self._ratchet.ratchet_encrypt(plaintext, associated_data)
 
-    def decrypt(self, ciphertext: bytes, associated_data: bytes = b"") -> bytes:
+    def decrypt(
+        self, ciphertext: bytes, associated_data: bytes = b""
+    ) -> bytes:
         """Decrypt a message."""
         if self._ratchet is None:
-            raise CryptoError("Session not established")
+            raise RuntimeError("Session not established")
         return self._ratchet.ratchet_decrypt(ciphertext, associated_data)
 
-    # ── Serialization ──────────────────────────────────────────────────
+    # ── Serialization ───────────────────────────────────────────────────
 
-    def export_state(self) -> dict[str, Any]:
-        """Export session state for persistence (does NOT include DH private scalar)."""
+    def export_state(self) -> dict:
+        """Export session state for persistence."""
         if self._ratchet is None:
             return {}
         r = self._ratchet
@@ -203,10 +204,9 @@ class Session:
             "sending_chain_index": r.sending_chain.index if r.sending_chain else 0,
             "receiving_chain_key": r.receiving_chain.key.hex() if r.receiving_chain else None,
             "receiving_chain_index": r.receiving_chain.index if r.receiving_chain else 0,
-            "previous_counter": r.previous_counter,
             "messages_sent": r.messages_sent,
             "messages_received": r.messages_received,
-            "role_is_initiator": self._role_is_initiator,
+            "previous_counter": r.previous_counter,
         }
 
     def __repr__(self) -> str:
@@ -217,10 +217,3 @@ class Session:
             f"sent={self.messages_sent}, recv={self.messages_received}, "
             f"established={self.is_established})"
         )
-
-
-__all__ = [
-    "HEADER_SIZE",
-    "Session",
-    "SessionConfig",
-]

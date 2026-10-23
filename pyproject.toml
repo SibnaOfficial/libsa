@@ -51,9 +51,6 @@ Documentation = "https://github.com/SibnaOfficial/libsa#readme"
 where = ["."]
 include = ["sibna*"]
 
-[tool.setuptools.package-data]
-sibna = ["py.typed"]
-
 [tool.mypy]
 python_version = "3.13"
 warn_return_any = true

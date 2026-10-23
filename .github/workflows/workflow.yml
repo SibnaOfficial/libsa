@@ -1,0 +1,298 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: [v*]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    # Controlled manual release recovery. Publishing is opt-in.
+    inputs:
+      publish_to_pypi:
+        description: "Publish the built artifacts to PyPI (only for eligible tags/manual release)"
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  # SHA of sibna-protc main resolved at the start of the run; reused for every
+  # upstream checkout in this run so all checks test the exact same revision.
+  SIBNA_PROTC_SHA: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Resolve upstream SHA ────────────────────────────────────────────────
+  resolve-sha:
+    name: Resolve sibna-protc main SHA
+    runs-on: ubuntu-latest
+    outputs:
+      sibna_protc_sha: ${{ steps.resolve.outputs.sibna_protc_sha }}
+    steps:
+      - name: Resolve upstream main SHA
+        id: resolve
+        run: |
+          SHA=$(git ls-remote https://github.com/SibnaOfficial/sibna-protc.git refs/heads/main | cut -f1)
+          echo "Resolved sibna-protc main SHA: $SHA"
+          echo "sibna_protc_sha=$SHA" >> "$GITHUB_OUTPUT"
+
+  # ── Linting, formatting, type checking ──────────────────────────────────
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    needs: [resolve-sha]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install black
+        run: python -m pip install black==26.10.1
+      - name: Check formatting
+        run: python -m black --check sibna
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: [resolve-sha]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: python -m pip install ruff
+      - name: Run ruff
+        run: python -m ruff check sibna
+
+  mypy:
+    name: Type Check
+    runs-on: ubuntu-latest
+    needs: [resolve-sha]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run mypy
+        run: python -m mypy sibna
+
+  # ── Tests ───────────────────────────────────────────────────────────────
+  test:
+    name: Test Suite
+    runs-on: ${{ matrix.os }}
+    needs: [resolve-sha]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: SibnaOfficial/sibna-protc
+          ref: ${{ needs.resolve-sha.outputs.sibna_protc_sha }}
+          path: sibna-protc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Log resolved upstream SHA
+        run: echo "Using sibna-protc main SHA: ${{ needs.resolve-sha.outputs.sibna_protc_sha }}"
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run Python SDK unit tests
+        run: python -m pytest sibna-protc/sdks/python/tests/ -v --tb=long -m "not interop"
+
+  # ── Source-parity check ─────────────────────────────────────────────────
+  source-parity:
+    name: Source-Parity Check
+    runs-on: ubuntu-latest
+    needs: [resolve-sha, fmt, lint, mypy]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: SibnaOfficial/sibna-protc
+          ref: ${{ needs.resolve-sha.outputs.sibna_protc_sha }}
+          path: sibna-protc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Log resolved upstream SHA
+        run: echo "Using sibna-protc main SHA: ${{ needs.resolve-sha.outputs.sibna_protc_sha }}"
+      - name: Run source-parity check
+        run: python scripts/check_pq_sync.py sibna-protc/sdks/python
+
+  # ── Packaging ───────────────────────────────────────────────────────────
+  package:
+    name: Package Build & Check
+    runs-on: ubuntu-latest
+    needs: [fmt, lint, mypy, test, source-parity]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install build tools
+        run: python -m pip install --upgrade build twine wheel
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Check distribution
+        run: twine check dist/*
+      - name: Inspect distribution contents
+        run: |
+          python - <<'PY'
+            import zipfile, glob, os
+            whl = glob.glob("dist/sibna-*.whl")[0]
+            names = zipfile.ZipFile(whl).namelist()
+            print("Wheel contents:")
+            for n in sorted(names):
+                print("  ", n)
+            forbidden = ["tests/", "scripts/smoke_test.py", "sibna/core.dll", "libsibna_core.dll"]
+            for f in forbidden:
+                hits = [n for n in names if n.startswith(f) or n == f]
+                if hits:
+                    print(f"FORBIDDEN artifact found: {hits}")
+                    raise SystemExit(1)
+            print("Content inspection OK: no test suite, smoke test, FFI wrapper, or native DLL.")
+          PY
+      - name: Install wheel in clean venv and smoke test
+        run: |
+          python -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install --upgrade pip
+          /tmp/smoke-venv/bin/pip install dist/sibna-*.whl
+          cd /tmp
+          /tmp/smoke-venv/bin/python - <<'PY'
+            import sibna, os
+            # Must import from the installed wheel in the clean venv, NOT the
+            # source checkout (CWD is /tmp here, and the venv is isolated).
+            assert "/tmp/smoke-venv" in os.path.normpath(sibna.__file__), sibna.__file__
+            from sibna import (
+                X25519KeyPair, Ed25519KeyPair, PreKeyBundle, Session,
+                SafetyNumber, GroupSession, SenderKey,
+                random_bytes, sha256, sha512, hkdf, hmac_sha256,
+                chacha20_poly1305_encrypt, chacha20_poly1305_decrypt,
+                derive_identity_keys,
+                x3dh_initiator, x3dh_responder,
+            )
+            from sibna.client import (
+                Identity, make_signed_envelope, verify_signed_envelope,
+                pad_payload, unpad_payload,
+            )
+
+            assert sibna.__version__ == "3.0.2", f"Expected 3.0.2, got {sibna.__version__}"
+            print("version:", sibna.__version__)
+
+            # Public API imports are present
+            for name in ["X25519KeyPair", "Ed25519KeyPair", "Session", "PreKeyBundle",
+                         "make_signed_envelope", "verify_signed_envelope",
+                         "pad_payload", "unpad_payload", "SafetyNumber",
+                         "GroupSession", "SenderKey"]:
+                assert hasattr(sibna, name), f"missing public API: {name}"
+            print("public API imports OK")
+
+            # Key generation + representative crypto operations
+            alice_ed = Ed25519KeyPair()
+            alice_x = X25519KeyPair()
+            sig = alice_ed.sign(b"identity")
+            assert alice_ed.verify(b"identity", sig)
+            digest = sha256(b"data")
+            assert len(digest) == 32
+            print("key generation + hash OK")
+
+            # Padding round trip
+            for data in [b"", b"ping", b"x" * 5000]:
+                assert unpad_payload(pad_payload(data)) == data
+            print("padding round trip OK")
+
+            # Signed envelope creation + verification (Identity has sign_hex)
+            alice_identity = Identity()
+            env = make_signed_envelope(
+                alice_identity,
+                recipient_id=bob_placeholder := Ed25519KeyPair().public_key.hex(),
+                payload_hex=b"deadbeef".hex(),
+            )
+            assert verify_signed_envelope(env), "signed envelope verification failed"
+            print("signed envelope create+verify OK")
+
+            # X3DH / session round trip
+            bob_ed, bob_x = derive_identity_keys(random_bytes(32))
+            bob_spk = X25519KeyPair.from_seed(random_bytes(32))
+            bob_opk = X25519KeyPair.from_seed(random_bytes(32))
+            bob_bundle = PreKeyBundle(
+                identity_key=bob_ed.public_key,
+                x25519_identity_key=bob_x.public_key,
+                signed_prekey=bob_spk.public_key,
+                signed_prekey_signature=bob_ed.sign(bob_spk.public_key),
+                onetime_prekey=bob_opk.public_key,
+            )
+
+            alice_session = Session()
+            ephemeral_pub = alice_session.initiate_as_initiator(
+                identity=alice_x,
+                ephemeral=X25519KeyPair(),
+                peer_bundle=bob_bundle,
+                our_device_id=b"alice-device-010",
+                peer_device_id=b"bob-device-01000",
+            )
+
+            plaintext = b"Hello Bob from Alice via Sibna Protocol v3.0.2!"
+            ciphertext = alice_session.encrypt(plaintext, associated_data=b"v3.0.2")
+
+            bob_session = Session()
+            bob_session.initiate_as_responder(
+                identity=bob_x,
+                signed_prekey=bob_spk,
+                onetime_prekey=bob_opk,
+                peer_identity=alice_x.public_key,
+                peer_ephemeral=ephemeral_pub,
+                our_device_id=b"bob-device-01000",
+                peer_device_id=b"alice-device-010",
+            )
+            decrypted = bob_session.decrypt(ciphertext, associated_data=b"v3.0.2")
+            assert decrypted == plaintext, "X3DH/session decrypt mismatch"
+            print("X3DH/session encrypt+decrypt round trip OK")
+
+            # Safety number
+            sn = SafetyNumber.calculate(alice_x.public_key, bob_x.public_key)
+            assert len(sn.as_string()) == 80
+            print("safety number OK")
+
+            print("SMOKE TEST OK")
+          PY
+
+  # ── Publish to PyPI (tags or explicit manual release) ───────────────────
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [package, resolve-sha]
+    if: |
+      (startsWith(github.ref, 'refs/tags/v') && !github.event.repository.fork)
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_to_pypi == 'true')
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Log resolved upstream SHA
+        run: echo "Using sibna-protc main SHA: ${{ needs.resolve-sha.outputs.sibna_protc_sha }}"
+      - name: Install build tools
+        run: python -m pip install --upgrade build twine
+      - name: Build package (same artifacts as package job)
+        run: python -m build
+      - name: Check distribution
+        run: twine check dist/*
+      - name: Publish to PyPI via Trusted Publishing (OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          print-hash: true
