@@ -77,7 +77,6 @@ ignore = ["F401", "F841", "E501"]
 line-length = 100
 
 [tool.pytest.ini_options]
-addopts = "-q -m \"not interop\""
 markers = [
     "interop: cross-implementation Rust-Python interoperability tests (require dedicated runner)",
 ]
