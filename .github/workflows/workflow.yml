@@ -180,3 +180,28 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           print-hash: true
+        continue-on-error: true
+      - name: Upload wheel to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/sibna-*.whl
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Upload sdist to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/sibna-*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Upload SHA-256 checksums to GitHub Release
+        run: |
+          sha256sum dist/sibna-*.whl dist/sibna-*.tar.gz > dist/SHA256SUMS.txt
+          cat dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Upload SHA-256SUMS.txt to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
