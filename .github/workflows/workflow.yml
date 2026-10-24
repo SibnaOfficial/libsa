@@ -149,39 +149,18 @@ jobs:
         run: twine check dist/*
       - name: Inspect distribution contents
         run: |
-          python - <<'PY'
-            import zipfile, glob, os, sys, traceback
-            try:
-                whls = glob.glob("dist/sibna-*.whl")
-                if not whls:
-                    print("ERROR: No wheel found in dist/")
-                    sys.exit(1)
-                whl = whls[0]
-                print(f"Wheel: {whl}")
-                names = zipfile.ZipFile(whl).namelist()
-                print("Wheel contents:")
-                for n in sorted(names):
-                    print("  ", n)
-                forbidden_prefixes = ["tests/", "scripts/smoke_test.py", "sibna/core.dll", "libsibna_core.dll"]
-                forbidden_exact = set()
-                hits = []
-                for n in names:
-                    for f in forbidden_prefixes:
-                        if n.startswith(f):
-                            hits.append((n, f))
-                    if n in forbidden_exact:
-                        hits.append((n, "exact"))
-                if hits:
-                    print("FORBIDDEN artifact found:")
-                    for n, f in hits:
-                        print(f"  {n} matches {f!r}")
-                    sys.exit(1)
-                print("Content inspection OK: no test suite, smoke test, FFI wrapper, or native DLL.")
-            except Exception as e:
-                print(f"INSPECTION ERROR: {type(e).__name__}: {e}")
-                traceback.print_exc()
-                sys.exit(1)
-          PY
+          WHEEL=$(ls dist/sibna-*.whl)
+          echo "Wheel: $WHEEL"
+          python -c "
+import zipfile, sys
+names = zipfile.ZipFile(\"$WHEEL\").namelist()
+for n in sorted(names):
+    print('  ', n)
+assert not any(n.startswith('tests/') for n in names), 'test suite found'
+assert 'scripts/smoke_test.py' not in names, 'smoke test found'
+assert not any('core.dll' in n for n in names), 'native DLL found'
+print('Content inspection OK: no test suite, smoke test, FFI wrapper, or native DLL.')
+"
       - name: Install wheel in clean venv and smoke test
         run: |
           python -m venv /tmp/smoke-venv
