@@ -150,29 +150,37 @@ jobs:
       - name: Inspect distribution contents
         run: |
           python - <<'PY'
-            import zipfile, glob, os, sys
-            whls = glob.glob("dist/sibna-*.whl")
-            if not whls:
-                print("ERROR: No wheel found in dist/")
+            import zipfile, glob, os, sys, traceback
+            try:
+                whls = glob.glob("dist/sibna-*.whl")
+                if not whls:
+                    print("ERROR: No wheel found in dist/")
+                    sys.exit(1)
+                whl = whls[0]
+                print(f"Wheel: {whl}")
+                names = zipfile.ZipFile(whl).namelist()
+                print("Wheel contents:")
+                for n in sorted(names):
+                    print("  ", n)
+                forbidden_prefixes = ["tests/", "scripts/smoke_test.py", "sibna/core.dll", "libsibna_core.dll"]
+                forbidden_exact = set()
+                hits = []
+                for n in names:
+                    for f in forbidden_prefixes:
+                        if n.startswith(f):
+                            hits.append((n, f))
+                    if n in forbidden_exact:
+                        hits.append((n, "exact"))
+                if hits:
+                    print("FORBIDDEN artifact found:")
+                    for n, f in hits:
+                        print(f"  {n} matches {f!r}")
+                    sys.exit(1)
+                print("Content inspection OK: no test suite, smoke test, FFI wrapper, or native DLL.")
+            except Exception as e:
+                print(f"INSPECTION ERROR: {type(e).__name__}: {e}")
+                traceback.print_exc()
                 sys.exit(1)
-            whl = whls[0]
-            print(f"Wheel: {whl}")
-            names = zipfile.ZipFile(whl).namelist()
-            print("Wheel contents:")
-            for n in sorted(names):
-                print("  ", n)
-            forbidden = ["tests/", "scripts/smoke_test.py", "sibna/core.dll", "libsibna_core.dll", ".dll"]
-            hits = []
-            for n in names:
-                for f in forbidden:
-                    if n.startswith(f) or n == f or f in n:
-                        hits.append((n, f))
-            if hits:
-                print("FORBIDDEN artifact found:")
-                for n, f in hits:
-                    print(f"  {n} matches {f!r}")
-                sys.exit(1)
-            print("Content inspection OK: no test suite, smoke test, FFI wrapper, or native DLL.")
           PY
       - name: Install wheel in clean venv and smoke test
         run: |
