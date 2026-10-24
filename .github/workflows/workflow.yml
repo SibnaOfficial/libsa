@@ -81,7 +81,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run mypy
-        run: python -m mypy sibna
+        run: python -m pip install mypy==1.18.2 && python -m mypy sibna
 
   # ── Tests ───────────────────────────────────────────────────────────────
   test:
