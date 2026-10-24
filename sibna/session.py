@@ -198,7 +198,6 @@ class Session:
         return {
             "session_id": self._session_id,
             "root_key": r.root_key.hex(),
-            "dh_local_private": r.dh_local_private.hex() if r.dh_local_private else None,
             "dh_local_public": r.dh_local_public.hex() if r.dh_local_public else None,
             "dh_remote_public": r.dh_remote_public.hex() if r.dh_remote_public else None,
             "sending_chain_key": r.sending_chain.key.hex() if r.sending_chain else None,
