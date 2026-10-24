@@ -106,7 +106,9 @@ jobs:
         run: |
           echo "Using sibna-protc main SHA: ${{ needs.resolve-sha.outputs.sibna_protc_sha }}"
       - name: Install dependencies
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install .
+          python -m pip install pytest pytest-cov pytest-asyncio
       - name: Run Python SDK unit tests
         run: python -m pytest sibna-protc/sdks/python/tests/ -v --tb=long -m "not interop" --ignore=sibna-protc/sdks/python/tests/test_pq_kem_interop.py --ignore=sibna-protc/sdks/python/tests/test_integration_full_flow.py
 
