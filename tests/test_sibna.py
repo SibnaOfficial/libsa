@@ -23,6 +23,7 @@ from sibna.client import (
     CryptoError,
 )
 from sibna.errors import ValidationError
+from sibna.session import Session
 from sibna.x3dh import (
     PreKeyBundle,
     generate_peer_bundle,
@@ -276,3 +277,84 @@ class TestPreKeyBundleSerialization:
         truncated = bytes(data[:-64])
         with pytest.raises(ValidationError):
             prekey_bundle_from_bytes(truncated)
+
+
+class TestSessionState:
+    """Session state export/import tests.
+
+    Verifies that export_state() never exposes DH private key material and
+    that imported sessions can continue encrypting/decrypting.
+    """
+
+    def _make_session_pair(self):
+        """Establish an X3DH session between Alice and Bob."""
+        alice_ed, alice_x = derive_identity_keys(bytes.fromhex("61" * 32))
+        bob_ed, bob_x = derive_identity_keys(bytes.fromhex("62" * 32))
+        bob_spk = X25519KeyPair()
+        bob_opk = X25519KeyPair()
+        bundle = generate_peer_bundle(
+            identity_ed=bob_ed,
+            identity_x25519=bob_x,
+            signed_prekey=bob_spk,
+            onetime_prekey=bob_opk,
+            device_id_bytes=bytes(16),
+            root_identity_key=bob_ed.public_key,
+        )
+        alice_session = Session()
+        ephemeral = alice_session.initiate_as_initiator(
+            alice_x, X25519KeyPair(), bundle, bytes(16), bytes(16)
+        )
+        bob_session = Session()
+        bob_session.initiate_as_responder(
+            bob_x, bob_spk, bob_opk, alice_x.public_key, ephemeral,
+            bytes(16), bytes(16),
+        )
+        return alice_session, bob_session
+
+    def test_export_excludes_dh_private_key(self):
+        """Exported state must never include the DH private scalar."""
+        alice_session, _ = self._make_session_pair()
+        ct = alice_session.encrypt(b"test message before export")
+        state = alice_session.export_state()
+        assert "dh_local_private" not in state
+        assert "dh_local_public" in state
+        assert "dh_remote_public" in state
+        assert "root_key" in state
+
+    def test_import_state_roundtrip(self):
+        """Imported session can encrypt/decrypt with the peer."""
+        alice_session, bob_session = self._make_session_pair()
+
+        # Encrypt from Alice, decrypt with Bob (establishes baseline)
+        plaintext1 = b"Hello before export"
+        ct1 = alice_session.encrypt(plaintext1)
+        assert bob_session.decrypt(ct1) == plaintext1
+
+        # Export Alice's state
+        state = alice_session.export_state()
+        assert "dh_local_private" not in state
+
+        # Import into a new session
+        imported_session = Session.import_state(state)
+
+        # Encrypt from imported session, decrypt with Bob
+        plaintext2 = b"Hello after import"
+        ct2 = imported_session.encrypt(plaintext2)
+        assert bob_session.decrypt(ct2) == plaintext2
+
+        # Verify no private key material in imported session
+        assert imported_session._ratchet.dh_local_private is None
+
+    def test_export_state_matches_ratchet_state(self):
+        """Exported state fields match the underlying ratchet state."""
+        alice_session, _ = self._make_session_pair()
+        alice_session.encrypt(b"test")
+        state = alice_session.export_state()
+        r = alice_session._ratchet
+        assert state["root_key"] == r.root_key.hex()
+        assert state["dh_local_public"] == r.dh_local_public.hex()
+        assert state["dh_remote_public"] == r.dh_remote_public.hex()
+        assert state["sending_chain_key"] == r.sending_chain.key.hex()
+        assert state["sending_chain_index"] == r.sending_chain.index
+        assert state["messages_sent"] == r.messages_sent
+        assert state["messages_received"] == r.messages_received
