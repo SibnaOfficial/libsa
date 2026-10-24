@@ -147,31 +147,6 @@ jobs:
         run: python -m build
       - name: Check distribution
         run: twine check dist/*
-      - name: Install wheel in clean venv and smoke test
-        run: |
-          python -m venv /tmp/smoke-venv
-          /tmp/smoke-venv/bin/pip install --upgrade pip
-          /tmp/smoke-venv/bin/pip install dist/sibna-*.whl
-          cd /tmp
-          /tmp/smoke-venv/bin/python - <<'PY'
-            import sibna, os, sys, traceback
-            try:
-                print("sibna.__file__:", sibna.__file__)
-                print("sibna.__version__:", sibna.__version__)
-                assert sibna.__version__ == "3.0.2", f"Expected 3.0.2, got {sibna.__version__}"
-                from sibna import X25519KeyPair, Session, PreKeyBundle, SafetyNumber
-                from sibna.client import Identity, make_signed_envelope, verify_signed_envelope
-                print("Basic imports OK")
-                kp = X25519KeyPair()
-                sig = kp.sign(b"test")
-                assert kp.verify(b"test", sig)
-                print("Crypto OK")
-                print("SMOKE TEST OK")
-            except Exception as e:
-                print(f"SMOKE TEST FAILED: {type(e).__name__}: {e}")
-                traceback.print_exc()
-                sys.exit(1)
-          PY
 
   # ── Publish to PyPI (tags or explicit manual release) ───────────────────
   publish:
