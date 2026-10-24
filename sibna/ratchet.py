@@ -206,6 +206,31 @@ class DoubleRatchet:
         self.root_key, sending_chain_key = self._kdf_rk(dh_out_send)
         self.sending_chain = ChainKey(key=sending_chain_key)
 
+    def _fresh_dh_ratchet_step(self) -> None:
+        """Perform a fresh DH ratchet step after state restoration.
+
+        Generates a new ephemeral dh_local key pair, computes the shared
+        secret with ``dh_remote_public``, and re-derives ``root_key`` and
+        ``sending_chain``. The ``dh_local_private`` is NOT persisted in
+        ``export_state()``, so after ``import_state()`` we must generate
+        a fresh one here to match the Rust core's ``deserialize_state()``
+        behavior (SIBNA-2026-014 / PATCH 22).
+        """
+        if self.dh_remote_public is None:
+            raise CryptoError("Cannot perform fresh DH ratchet step without remote DH public key")
+
+        new_local = X25519KeyPair.generate()
+        dh_out_send = new_local.dh(self.dh_remote_public)
+        self.root_key, sending_chain_key = self._kdf_rk(dh_out_send)
+        self.dh_local_private = new_local.private_key_bytes
+        self.dh_local_public = new_local.public_key
+        self.sending_chain = ChainKey(
+            key=sending_chain_key,
+            max_messages=(
+                self.sending_chain.max_messages if self.sending_chain else C.MAX_CHAIN_MESSAGES
+            ),
+        )
+
     # ── Skipped keys ──────────────────────────────────────────────────
 
     def _try_skipped_message_key(self, dh_public: bytes, message_number: int) -> Optional[bytes]:

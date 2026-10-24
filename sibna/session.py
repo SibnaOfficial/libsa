@@ -211,13 +211,19 @@ class Session:
         }
 
     @classmethod
-    def import_state(cls, state: dict[str, Any], config: Optional[SessionConfig] = None) -> "Session":
+    def import_state(
+        cls, state: dict[str, Any], config: Optional[SessionConfig] = None
+    ) -> "Session":
         """Restore a session from a previously exported state dict.
 
-        The DH private scalar is deliberately NOT restored: it is regenerated
-        on the next ratchet step, matching the Rust core behavior where
-        ``dh_local_serde`` always serializes ``None``. This means exported
-        state never exposes private key material.
+        The DH private scalar is deliberately NOT persisted in the exported
+        state and is regenerated here via a fresh DH ratchet step, matching
+        the Rust core behavior where ``dh_local_serde`` always serializes
+        ``None``. If the exported state contains a remote DH public key and a
+        sending chain, a new ephemeral ``dh_local`` key pair is generated
+        immediately and ``root_key``/``sending_chain`` are re-derived, so the
+        restored session is ready to send and ratchet without exposing
+        private key material.
         """
         s = cls(config=config)
         s._ratchet = cls._ratchet_from_dict(state)
@@ -243,15 +249,29 @@ class Session:
                 index=state.get("receiving_chain_index", 0),
                 max_messages=C.MAX_CHAIN_MESSAGES,
             )
-        return DoubleRatchet(
+        ratchet = DoubleRatchet(
             root_key=bytes.fromhex(state["root_key"]),
             sending_chain=sending_chain,
             receiving_chain=receiving_chain,
             dh_local_private=None,  # Never restore private scalar
-            dh_local_public=bytes.fromhex(state["dh_local_public"]) if state.get("dh_local_public") else None,
-            dh_remote_public=bytes.fromhex(state["dh_remote_public"]) if state.get("dh_remote_public") else None,
+            dh_local_public=(
+                bytes.fromhex(state["dh_local_public"]) if state.get("dh_local_public") else None
+            ),
+            dh_remote_public=(
+                bytes.fromhex(state["dh_remote_public"]) if state.get("dh_remote_public") else None
+            ),
             previous_counter=state.get("previous_counter", 0),
         )
+
+        # SIBNA-2026-014: After restore, dh_local_private is None (never persisted).
+        # If we have a remote DH public key and a sending chain, perform a fresh
+        # DH ratchet step to generate a new ephemeral dh_local and re-derive
+        # root_key and sending_chain. This matches the Rust core's
+        # deserialize_state() behavior (SIBNA-2026-014 / PATCH 22).
+        if ratchet.dh_remote_public is not None and ratchet.sending_chain is not None:
+            ratchet._fresh_dh_ratchet_step()
+
+        return ratchet
 
     def __repr__(self) -> str:
         peer_hex = self._peer_id[:16].hex() if self._peer_id else "None"

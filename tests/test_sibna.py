@@ -283,7 +283,8 @@ class TestSessionState:
     """Session state export/import tests.
 
     Verifies that export_state() never exposes DH private key material and
-    that imported sessions can continue encrypting/decrypting.
+    that imported sessions can continue encrypting/decrypting, including
+    through a subsequent DH-ratchet transition.
     """
 
     def _make_session_pair(self):
@@ -306,8 +307,13 @@ class TestSessionState:
         )
         bob_session = Session()
         bob_session.initiate_as_responder(
-            bob_x, bob_spk, bob_opk, alice_x.public_key, ephemeral,
-            bytes(16), bytes(16),
+            bob_x,
+            bob_spk,
+            bob_opk,
+            alice_x.public_key,
+            ephemeral,
+            bytes(16),
+            bytes(16),
         )
         return alice_session, bob_session
 
@@ -322,7 +328,7 @@ class TestSessionState:
         assert "root_key" in state
 
     def test_import_state_roundtrip(self):
-        """Imported session can encrypt/decrypt with the peer."""
+        """Imported session can encrypt/decrypt with the peer after restore."""
         alice_session, bob_session = self._make_session_pair()
 
         # Encrypt from Alice, decrypt with Bob (establishes baseline)
@@ -337,13 +343,15 @@ class TestSessionState:
         # Import into a new session
         imported_session = Session.import_state(state)
 
+        # Imported session MUST have a fresh dh_local_private (regenerated
+        # via fresh DH ratchet step on import, matching Rust deserialize_state)
+        assert imported_session._ratchet.dh_local_private is not None
+        assert imported_session._ratchet.dh_local_public is not None
+
         # Encrypt from imported session, decrypt with Bob
         plaintext2 = b"Hello after import"
         ct2 = imported_session.encrypt(plaintext2)
         assert bob_session.decrypt(ct2) == plaintext2
-
-        # Verify no private key material in imported session
-        assert imported_session._ratchet.dh_local_private is None
 
     def test_export_state_matches_ratchet_state(self):
         """Exported state fields match the underlying ratchet state."""
@@ -358,3 +366,49 @@ class TestSessionState:
         assert state["sending_chain_index"] == r.sending_chain.index
         assert state["messages_sent"] == r.messages_sent
         assert state["messages_received"] == r.messages_received
+
+    def test_import_state_ratchet_transition(self):
+        """Imported session can complete a new DH-ratchet transition.
+
+        Correct X3DH flow: Alice sends → Bob receives → Alice exports
+        (sending chain only) → Import → Imported Alice sends → Bob
+        receives (sees new dh_public, Bob ratchets) → Bob responds →
+        Imported Alice receives (detects Bob's new dh_public, Alice
+        ratchets) → Imported Alice decrypts.
+
+        This exercises _dh_ratchet_step on both sides after import_state().
+        """
+        alice_session, bob_session = self._make_session_pair()
+
+        # Alice sends first message → Bob receives (Bob creates sending chain)
+        plaintext_a1 = b"Alice message 1"
+        ct_a1 = alice_session.encrypt(plaintext_a1)
+        assert bob_session.decrypt(ct_a1) == plaintext_a1
+
+        # Export Alice's state NOW (only sending chain, no receiving chain yet)
+        state = alice_session.export_state()
+        assert "dh_local_private" not in state
+
+        # Import into a new session
+        imported_session = Session.import_state(state)
+
+        # Imported session MUST have a fresh dh_local_private
+        assert imported_session._ratchet.dh_local_private is not None
+        assert imported_session._ratchet.dh_local_public is not None
+
+        # Imported Alice sends → Bob receives, Bob sees new dh_public,
+        # Bob performs DH ratchet step
+        plaintext_a2 = b"Alice message 2 after import"
+        ct_a2 = imported_session.encrypt(plaintext_a2)
+        assert bob_session.decrypt(ct_a2) == plaintext_a2
+
+        # Bob responds → Imported Alice receives, detects Bob's new dh_public,
+        # performs DH ratchet step, decrypts successfully
+        plaintext_b2 = b"Bob response 2 after import"
+        ct_b2 = bob_session.encrypt(plaintext_b2)
+        assert imported_session.decrypt(ct_b2) == plaintext_b2
+
+        # Imported session can continue the conversation
+        plaintext_a3 = b"Alice message 3 after import"
+        ct_a3 = imported_session.encrypt(plaintext_a3)
+        assert bob_session.decrypt(ct_a3) == plaintext_a3
