@@ -40,7 +40,7 @@ Documentation = "https://github.com/SibnaOfficial/libsa#readme"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sibna"]
+include = ["sibna*"]
 exclude = ["sibna-protc*", "*.tests", "*.tests.*", "tests.*", "tests"]
 
 [tool.mypy]
