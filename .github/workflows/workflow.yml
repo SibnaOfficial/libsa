@@ -161,7 +161,7 @@ jobs:
     environment: release
     permissions:
       id-token: write
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -203,5 +203,43 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Update GitHub Release notes
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v3.0.2
+          name: Sibna SDK v3.0.2 Beta
+          body: |
+            # Sibna Python SDK v3.0.2 Beta Release
+
+            This is a Beta release of the Sibna Python SDK v3.0.2.
+
+            ## What's included
+
+            - Pure-Python implementation of the Sibna Protocol
+            - X3DH handshake, Double Ratchet session encryption
+            - Sender-key group messaging
+            - Safety numbers
+            - Signed envelopes
+            - Relay HTTP/WebSocket client
+
+            ## Important Security Notice
+
+            This release has **not** undergone an independent third-party cryptographic audit.
+            Do not use in production environments requiring formal cryptographic verification without
+            appropriate security review.
+
+            ## Installation
+
+            ```bash
+            pip install sibna==3.0.2
+            ```
+
+            ## Artifacts
+
+            - `sibna-3.0.2-py3-none-any.whl` - Built wheel
+            - `sibna-3.0.2.tar.gz` - Source distribution
+            - `SHA256SUMS.txt` - SHA-256 checksums for all artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
