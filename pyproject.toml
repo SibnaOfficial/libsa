@@ -26,20 +26,11 @@ classifiers = [
 ]
 dependencies = [
     "cryptography>=41.0",
+    "blake3>=1.0",
+    "pqcrypto>=0.3",
     "requests>=2.31",
     "aiohttp>=3.9",
 ]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-cov>=4.0",
-    "pytest-asyncio>=1.0",
-    "mypy>=1.0",
-    "black==26.10.1",
-]
-blake3 = ["blake3>=1.0"]
-pqcrypto = ["pqcrypto>=0.3"]
 
 [project.urls]
 Homepage = "https://github.com/SibnaOfficial/libsa"
