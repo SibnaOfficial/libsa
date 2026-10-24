@@ -56,7 +56,7 @@ def read_protocol_version_string() -> str:
 def read_constants_wire_version() -> int:
     constants = REPO_ROOT / "sibna" / "constants.py"
     text = constants.read_text()
-    m = re.search(r'^PROTOCOL_VERSION_WIRE\s*=\s*(\d+)\s*$', text, re.MULTILINE)
+    m = re.search(r"^PROTOCOL_VERSION_WIRE\s*=\s*(\d+)\s*$", text, re.MULTILINE)
     if not m:
         fail("sibna/constants.py: PROTOCOL_VERSION_WIRE not found")
         return -1
