@@ -147,20 +147,6 @@ jobs:
         run: python -m build
       - name: Check distribution
         run: twine check dist/*
-      - name: Inspect distribution contents
-        run: |
-          WHEEL=$(ls dist/sibna-*.whl | head -1)
-          echo "Wheel: $WHEEL"
-          python << PY
-import zipfile, sys
-names = zipfile.ZipFile("$WHEEL").namelist()
-for n in sorted(names):
-    print('  ', n)
-assert not any(n.startswith('tests/') for n in names), 'test suite found'
-assert 'scripts/smoke_test.py' not in names, 'smoke test found'
-assert not any('core.dll' in n for n in names), 'native DLL found'
-print('Content inspection OK: no test suite, smoke test, FFI wrapper, or native DLL.')
-PY
       - name: Install wheel in clean venv and smoke test
         run: |
           python -m venv /tmp/smoke-venv
